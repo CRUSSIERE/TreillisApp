@@ -47,7 +47,9 @@ la remplir, qui modifient la même chose :
    à l'œil, et elle marche dans les deux modes.
 2. **Clic sur un nœud du canvas**, en mode *Treillis complet* : il passe en
    bleu. Pratique sur un petit treillis, vite pénible au-delà de quelques
-   dizaines de nœuds.
+   dizaines de nœuds. Les nœuds décochables sont atteignables au **clavier**
+   (Tab pour circuler, Entrée ou Espace pour basculer) ; les données
+   détaillées, qui ne se décochent pas, ne prennent pas le focus.
 
 Exemple, pour obtenir `codeP, num_mois, codeC` : *+ agrégat*, puis PRODUITS →
 `codeP`, TEMPS → `num_mois`, CLIENTS → `codeC`.
@@ -232,7 +234,9 @@ H_An  = <codeT, num_mois, annee>              64 noeuds (3 dimensions)
 ```
 
 Une dimension à **hiérarchies multiples** fait apparaître un sélecteur : le
-treillis prend un axe par dimension, on choisit laquelle sert d'axe.
+treillis prend un axe par dimension, on choisit laquelle sert d'axe. Changer
+d'axe change aussi ses attributs faibles, qui sont attachés aux paramètres du
+chemin choisi.
 
 ## Format JSON
 
@@ -328,7 +332,7 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-51 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+56 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
 SQL de la p.62, la décomposition des moyennes, l'échappement des identifiants,
 les attributs faibles, l'élagage de la sélection, le tracé des liens qui

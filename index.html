@@ -589,7 +589,11 @@ function renderCanvas() {
     ? derivations([...mats], dims, state.sources).map((e) => ({ ...e, deriv: true }))
     : lattice.edges
 
+  const total = lattice.nodes.length
   host.innerHTML = diagramSvg({
+    label: partial
+      ? `Treillis partiel : ${mats.size} agrégats, ${analyses.length} analyses`
+      : `Treillis complet : ${total} nœuds`,
     items,
     analyses,
     edges,
@@ -599,7 +603,6 @@ function renderCanvas() {
     materialized: mats,
   })
 
-  const total = lattice.nodes.length
   $('#count').textContent = partial
     ? `${mats.size} nœud${mats.size > 1 ? 's' : ''} matérialisé${mats.size > 1 ? 's' : ''} sur ${total}`
     : `${total} nœuds — clique pour matérialiser`
@@ -684,7 +687,9 @@ $('#panel').addEventListener('click', (e) => {
       break
     case 'add-ana':
       state.analyses.push({
-        id: `an${Date.now().toString(36)}${state.analyses.length}`,
+        // Date.now() seul collisionne si on supprime puis rajoute dans la
+        // meme milliseconde ; deux analyses partageraient alors une cle
+        id: `an${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
         name: `A${state.analyses.length + 1}`,
         extras: [],
         levels: axes().map(() => 0),
@@ -779,25 +784,39 @@ $('#panel').addEventListener('change', (e) => {
     const dim = state.dimensions[Number(el.dataset.d)]
     const chosen = dim.hierarchies.find((h) => h.name === el.value)
     if (chosen) {
+      // les attributs faibles sont indexes par position dans le chemin :
+      // changer d'axe doit les changer aussi, sinon ils designeraient les
+      // niveaux de l'ancienne hierarchie
       dim.levels = [...chosen.levels]
+      dim.weak = { ...(chosen.weak ?? {}) }
       render()
     }
   }
 })
 
-/* Selection des noeuds a materialiser */
+/* Selection des noeuds a materialiser -- souris et clavier */
+$('#canvas').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return
+  const g = e.target.closest('[data-key][tabindex]')
+  if (!g) return
+  e.preventDefault() // sinon l'espace fait defiler le canvas
+  basculeNoeud(g.dataset.key)
+})
+
 $('#canvas').addEventListener('click', (e) => {
   const g = e.target.closest('[data-key]')
-  if (!g) return
-  const key = g.dataset.key
+  if (g) basculeNoeud(g.dataset.key)
+})
+
+function basculeNoeud(key) {
   if (key.startsWith('A:')) return // une analyse n'est pas un noeud du treillis
   if (key === baseKey(axes())) return // la table de faits n'est pas optionnelle
 
   const i = state.materialized.indexOf(key)
   if (i >= 0) state.materialized.splice(i, 1)
   else state.materialized.push(key)
-  renderCanvas()
-})
+  render() // le panneau des agregats doit suivre le clic
+}
 
 /* ------------------------------------------------------------------ */
 /* Modes                                                               */

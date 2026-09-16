@@ -226,6 +226,13 @@ check('analyses -- un agregat trop grossier est nomme, dimension par dimension',
   assert.deepEqual(analysisIssue(parseKey(BASE), AGG2, p35), ['PRODUITS', 'TEMPS'])
 })
 
+check('analyses -- une dimension non precisee vaut le niveau le plus fin', () => {
+  // `levels` plus court que `dimensions` : comparer a undefined rendait toute
+  // comparaison fausse et l'incompatibilite passait inapercue
+  assert.deepEqual(analysisIssue([0], AGG1, p35), ['TEMPS'], 'TEMPS reste signale')
+  assert.deepEqual(analysisIssue([], AGG2, p35), ['PRODUITS', 'TEMPS'])
+})
+
 check('analyses -- un rattachement valable ne signale rien', () => {
   assert.deepEqual(analysisIssue(parseKey(AGG1), AGG1, p35), [])
   assert.deepEqual(analysisIssue(parseKey(AGG1), BASE, p35), [], 'la table de faits repond a tout')
@@ -403,6 +410,33 @@ const modele = () => ({
   materialized: new Set(['0,0', '0,1']),
 })
 
+check('a11y -- le SVG s’annonce sans masquer ses boites focalisables', () => {
+  const svg = diagramSvg({ ...modele(), label: 'Treillis partiel : 2 agrégats' })
+  assert.match(svg, /role="group"/, '"img" rendrait tout le contenu presentationnel')
+  assert.match(svg, /aria-label="Treillis partiel : 2 agrégats"/)
+})
+
+check('a11y -- une boite cliquable est atteignable au clavier et annoncee', () => {
+  const svg = diagramSvg(modele())
+  // Agg1 est materialise et decochable : focalisable
+  const agg1 = svg.slice(svg.indexOf('data-key="0,1"'), svg.indexOf('data-key="0,1"') + 220)
+  assert.match(agg1, /tabindex="0"/)
+  assert.match(agg1, /role="button"/)
+  assert.match(agg1, /aria-label="[^"]*Cliquer pour retirer/)
+
+  // la table de faits n'est pas optionnelle : ni focus ni role de bouton
+  const base = svg.slice(svg.indexOf('data-key="0,0"'), svg.indexOf('data-key="0,0"') + 220)
+  assert.ok(!base.includes('tabindex'), 'la base ne doit pas etre un piege au clavier')
+  assert.ok(!base.includes('role="button"'))
+})
+
+check('trace -- une rangee inconnue ne fait plus lever d’exception', () => {
+  // rowBounds trop court : avant, rangee.y levait un TypeError
+  assert.doesNotThrow(() => linkPath(0, 300, 0, 60, 0, 3, [{ y: 300, right: 0, boxes: [] }]))
+  const { d } = linkPath(0, 300, 0, 60, 0, 3, [{ y: 300, right: 0, boxes: [] }])
+  assert.match(d, /^M0,300 L0,60$/, 'sans information, on ne contourne pas au hasard')
+})
+
 check('rendu -- le SVG porte boites, aretes et styles embarques', () => {
   const svg = diagramSvg(modele())
   assert.match(svg, /^<svg id="svg"/)
@@ -564,7 +598,7 @@ const exportOlap = {
         { id: 'p1', name: 'codeP', weakAttributes: [{ id: 'w2', name: 'description' }, { id: 'w3', name: 'prix_unit' }] },
         { id: 'p2', name: 'sous_categ', weakAttributes: [] },
         { id: 'p3', name: 'categorie', weakAttributes: [] },
-        { id: 'p4', name: 'marque', weakAttributes: [] },
+        { id: 'p4', name: 'marque', weakAttributes: [{ id: 'w4', name: 'pays_marque' }] },
       ],
       hierarchies: [
         { id: 'h1', name: 'H_Pro', path: ['p1', 'p2', 'p3'] },
@@ -585,6 +619,18 @@ check('import OLAP -- hierarchies[].path devient les niveaux du treillis', () =>
   assert.deepEqual(measures.map((m) => m.name), ['quantite', 'montant'])
   assert.equal(dimensions.length, 1)
   assert.deepEqual(dimensions[0].levels, ['codeP', 'sous_categ', 'categorie'])
+})
+
+check('import OLAP -- chaque hierarchie porte SES attributs faibles', () => {
+  const [produits] = fromOlapSchema(exportOlap).dimensions
+  // H_Pro : description et prix_unit sont sur codeP, en position 0
+  assert.deepEqual(produits.hierarchies[0].weak, { 0: ['description', 'prix_unit'] })
+  // H_Marque : meme cle en 0, plus pays_marque sur marque, en position 1.
+  // Indexer par nom de parametre aurait confondu les deux chemins.
+  assert.deepEqual(produits.hierarchies[1].weak, {
+    0: ['description', 'prix_unit'],
+    1: ['pays_marque'],
+  })
 })
 
 check('import OLAP -- les hierarchies alternatives restent proposables', () => {

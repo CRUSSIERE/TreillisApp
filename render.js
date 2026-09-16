@@ -29,6 +29,8 @@ const SVG_STYLE = `
     fill: #1c2430; dominant-baseline: middle; text-anchor: middle;
   }
   .node.mat rect { fill: #e8f0fc; stroke: #2f6fd0; stroke-width: 1.8; }
+  .node:focus { outline: none; }
+  .node:focus rect { stroke: #7c3aed; stroke-width: 2.6; }
   .node.base rect { fill: #fdf1e2; stroke: #b45309; stroke-width: 1.8; }
   .node.analysis rect { fill: #effaf1; stroke: #15803d; stroke-width: 1.8; }
   .edge.analysis { stroke: #334155; stroke-width: 1.6; }
@@ -257,8 +259,13 @@ function drawBoxes(placed, base, materialized, nom) {
           : mat
             ? 'Cliquer pour retirer du treillis partiel'
             : 'Cliquer pour matérialiser'
+      // une boite cliquable doit l'etre aussi au clavier, et s'annoncer :
+      // sans tabindex ni role, le canvas n'offrait aucune prise hors souris
       const cliquable = !estAnalyse && !estBase
-      return `<g class="${cls}" data-key="${esc(n.key)}"${cliquable ? ' cursor="pointer"' : ''}>
+      const a11y = cliquable
+        ? ` cursor="pointer" tabindex="0" role="button" aria-label="${esc(`${n.label} — ${t}`)}"`
+        : ''
+      return `<g class="${cls}" data-key="${esc(n.key)}"${a11y}>
         ${titre(t)}
         ${tagSvg}
         <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/>
@@ -275,7 +282,7 @@ function drawBoxes(placed, base, materialized, nom) {
  * porte sa cible et, le cas echeant, les dimensions qui l'empechent d'etre
  * servie. Ce module ne recalcule aucune semantique -- il place et il dessine.
  */
-export function diagramSvg({ items, analyses, edges, freeArrows, names, base, materialized }) {
+export function diagramSvg({ items, analyses, edges, freeArrows, names, base, materialized, label = 'Treillis d’agrégats' }) {
   const { placed, width, height, rowBounds } = layout(items, analyses)
   const nom = (k) => names.get(k) ?? k
 
@@ -296,7 +303,10 @@ export function diagramSvg({ items, analyses, edges, freeArrows, names, base, ma
   const top = Math.min(0, minY - 6)
   const h = height - top
 
+  // role="group" et non "img" : "img" rendrait tout le contenu presentationnel
+  // et masquerait les boites focalisables aux lecteurs d'ecran
   return `<svg id="svg" xmlns="http://www.w3.org/2000/svg"
+      role="group" aria-label="${esc(label)}"
       width="${w}" height="${h}" viewBox="0 ${top} ${w} ${h}">
     <style>${SVG_STYLE}</style>
     <defs>

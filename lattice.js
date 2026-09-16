@@ -200,7 +200,12 @@ export function analysisSource(levels, materializedKeys, dimensions) {
  */
 export function analysisIssue(levels, targetKey, dimensions) {
   const target = parseKey(targetKey)
-  return dimensions.map((d, i) => (target[i] > levels[i] ? d.name : null)).filter(Boolean)
+  // un niveau absent vaut 0, le plus fin : sans ce defaut, comparer a
+  // `undefined` rend toute comparaison fausse et l'incompatibilite passait
+  // inapercue au lieu d'etre signalee
+  return dimensions
+    .map((d, i) => ((target[i] ?? 0) > (levels[i] ?? 0) ? d.name : null))
+    .filter(Boolean)
 }
 
 /**
@@ -517,29 +522,36 @@ export function fromOlapSchema(json) {
   const dimensions = json.dimensions.map((d) => {
     const nameOf = new Map((d.parameters ?? []).map((p) => [p.id, p.name]))
 
-    // p.8 : un attribut faible complete la semantique d'UN parametre
+    // p.8 : un attribut faible complete la semantique d'UN parametre. On
+    // indexe par ID et non par nom : deux parametres homonymes dans une meme
+    // dimension se marcheraient dessus.
     const weakOf = new Map(
-      (d.parameters ?? []).map((p) => [p.name, (p.weakAttributes ?? []).map((w) => w.name)]),
+      (d.parameters ?? []).map((p) => [p.id, (p.weakAttributes ?? []).map((w) => w.name)]),
     )
 
     // plusieurs hierarchies = plusieurs axes possibles ; l'UI laisse choisir,
-    // la premiere sert de defaut
+    // la premiere sert de defaut. Chacune porte SES attributs faibles : ils
+    // sont indexes par position dans le chemin, qui change d'une hierarchie
+    // a l'autre.
     const hierarchies = (d.hierarchies ?? [])
-      .map((h) => ({
-        name: h.name || 'H',
-        levels: (h.path ?? []).map((id) => nameOf.get(id)).filter(Boolean),
-      }))
+      .map((h) => {
+        const chemin = (h.path ?? []).filter((id) => nameOf.has(id))
+        const weak = {}
+        chemin.forEach((id, i) => {
+          const liste = weakOf.get(id) ?? []
+          if (liste.length) weak[i] = liste
+        })
+        return { name: h.name || 'H', levels: chemin.map((id) => nameOf.get(id)), weak }
+      })
       .filter((h) => h.levels.length > 0)
 
     // une dimension sans hierarchie garde au moins sa cle comme unique niveau
-    const fallbackKey = nameOf.get(d.keyParameterId)
-    const levels = hierarchies[0]?.levels ?? (fallbackKey ? [fallbackKey] : [])
+    const cle = d.keyParameterId
+    const secours = nameOf.get(cle)
+    const levels = hierarchies[0]?.levels ?? (secours ? [secours] : [])
+    const weak =
+      hierarchies[0]?.weak ?? (secours && weakOf.get(cle)?.length ? { 0: weakOf.get(cle) } : {})
 
-    const weak = {}
-    levels.forEach((niveau, i) => {
-      const liste = weakOf.get(niveau) ?? []
-      if (liste.length) weak[i] = liste
-    })
     return { name: d.name, levels, weak, hierarchies }
   })
 
