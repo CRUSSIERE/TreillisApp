@@ -152,12 +152,13 @@
 import {
   AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
   derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, keyOf, latticeSize,
-  analysisIssue, availableWeak, displayLabel, linkPath, parseKey, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
+  analysisIssue, availableWeak, displayLabel, linkPath, parseKey, pruneSelection,
+  selectionSize, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
   // ?v= : index.html et lattice.js ont chacun leur cache de 10 min sur
   // GitHub Pages. Sans ce marqueur, une page fraiche peut charger un module
   // perime, qui n'exporte pas encore ce qu'elle importe -> page blanche.
   // A INCREMENTER a chaque modification de lattice.js.
-} from './lattice.js?v=7'
+} from './lattice.js?v=8'
 
 /* ------------------------------------------------------------------ */
 /* Etat                                                                */
@@ -194,64 +195,25 @@ const esc = (s) =>
  *  differentes. */
 const axes = () => state.dimensions.filter((d) => d.levels.length > 0)
 
-/** Les cles de noeuds encodent des indices de niveau : une dimension retiree
- *  ou raccourcie les rend caduques. On elague plutot que de tout effacer --
- *  ajouter un niveau en fin de hierarchie ne perd aucune selection. */
-function pruneSelection() {
-  const dims = axes()
-  const sizes = dims.map((d) => d.levels.length + 1)
-  const base = baseKey(dims)
-  // trie : sans ca le panneau listerait les agregats dans l'ordre d'ajout
-  // alors que leurs noms (Agg1, Agg2...) suivent l'ordre topologique
-  state.materialized = sortKeys(
-    new Set(
-      state.materialized.filter((key) => {
-        const node = parseKey(key)
-        return (
-          key !== base && // la table de faits est implicite, jamais listee
-          node.length === sizes.length &&
-          node.every((v, i) => Number.isInteger(v) && v >= 0 && v < sizes[i])
-        )
-      }),
-    ),
-  )
+function applyPrune() {
+  Object.assign(state, pruneSelection(state, axes()))
+}
 
-  // une source qui n'est plus materialisee, ou devenue trop grossiere apres
-  // un remaniement des niveaux, redevient automatique plutot que de pointer
-  // dans le vide
-  const valides = new Set([...state.materialized, base])
-  state.sources = Object.fromEntries(
-    Object.entries(state.sources ?? {}).filter(
-      ([to, from]) =>
-        valides.has(to) && valides.has(from) && validSources(to, state.materialized, dims).includes(from),
-    ),
-  )
-
-  // meme logique pour les analyses : un niveau par dimension, dans les bornes
-  const cibles = new Set([...state.materialized, base])
-  state.analyses = (state.analyses ?? []).map((a, i) => {
-    const { target, ...reste } = a
-    const levels = dims.map((d, j) => {
-      const v = a.levels?.[j]
-      return Number.isInteger(v) && v >= 0 && v <= d.levels.length ? v : 0
-    })
-    const dispo = new Set(availableWeak(levels, dims).map((w) => w.name))
-    return {
-      ...reste,
-      id: a.id ?? `an${Date.now().toString(36)}${i}`,
-      levels,
-      // un attribut faible ne vaut qu'au niveau dont il depend : changer ce
-      // niveau le retire de l'analyse
-      extras: (a.extras ?? []).filter((x) => dispo.has(x)),
-      // un rattachement impose vers un agregat supprime redevient automatique
-      ...(target && cibles.has(target) ? { target } : {}),
-    }
-  })
-
-  // une fleche libre dont une extremite a disparu n'a plus de sens
-  const presentes = new Set([...cibles, ...state.analyses.map((a) => `A:${a.id}`)])
-  state.freeArrows = (state.freeArrows ?? []).filter(
-    (f) => presentes.has(f.from) && presentes.has(f.to),
+/**
+ * Garde-fou avant une modification de structure. Retirer une dimension ou un
+ * niveau change l'arite des cles : agregats, sources imposees et fleches
+ * libres deviennent caducs et disparaissent. L'app n'a pas d'annulation, donc
+ * on chiffre la perte en simulant l'elagage sur les dimensions *futures*, et
+ * on ne demande que si quelque chose serait reellement perdu.
+ */
+function accepteLaPerte(dimensionsApres) {
+  const apres = pruneSelection(state, dimensionsApres.filter((d) => d.levels.length > 0))
+  const perdus = selectionSize(state) - selectionSize(apres)
+  if (perdus <= 0) return true
+  return confirm(
+    `Cette suppression retire ${perdus} élément${perdus > 1 ? 's' : ''} de ta sélection ` +
+      `(agrégats matérialisés, sources imposées, flèches). ` +
+      `C'est irréversible. Continuer ?`,
   )
 }
 
@@ -699,7 +661,6 @@ function renderCanvas() {
       // rattachement impose s'il designe encore un noeud materialise,
       // sinon celui que l'app calcule
       target: a.target && mats.has(a.target) ? a.target : analysisSource(a.levels, [...mats], dims),
-      impose: !!(a.target && mats.has(a.target)),
     }
   })
 
@@ -763,9 +724,6 @@ function renderCanvas() {
     })
     .join('')
 
-  // Fleches libres : aucune semantique de treillis, elles reliant ce que
-  // l'utilisateur veut. Tracees en violet pour ne pas se confondre avec les
-  // derivations (bleu) ni les rattachements d'analyse (sombre).
   // Fleches libres : aucune semantique de treillis, elles relient ce que
   // l'utilisateur veut. Violet, pour ne se confondre ni avec les derivations
   // (bleu) ni avec les rattachements d'analyse (sombre).
@@ -878,7 +836,7 @@ function renderCanvas() {
 }
 
 function render() {
-  pruneSelection()
+  applyPrune()
   renderPanel()
   renderCanvas()
 }
@@ -902,15 +860,22 @@ $('#panel').addEventListener('click', (e) => {
         hierarchies: [],
       })
       break
-    case 'del-dim':
+    case 'del-dim': {
+      if (!accepteLaPerte(state.dimensions.filter((_, k) => k !== d))) return
       state.dimensions.splice(d, 1)
       break
+    }
     case 'add-level':
       state.dimensions[d].levels.push(`niveau${state.dimensions[d].levels.length + 1}`)
       break
-    case 'del-level':
+    case 'del-level': {
+      const apres = state.dimensions.map((dim, k) =>
+        k === d ? { ...dim, levels: dim.levels.filter((_, m) => m !== l) } : dim,
+      )
+      if (!accepteLaPerte(apres)) return
       state.dimensions[d].levels.splice(l, 1)
       break
+    }
     case 'move-level': {
       const levels = state.dimensions[d].levels
       const to = l + Number(btn.dataset.dir)

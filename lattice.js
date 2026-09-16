@@ -228,20 +228,43 @@ export function aggregateNames(materializedKeys, dimensions, factName = 'FAITS')
 }
 
 /**
- * Re-agreger un agregat n'utilise pas toujours la fonction de la premiere
- * passe : un COUNT se re-agrege en SUM, et une moyenne ne se re-agrege pas
- * du tout -- mesure non additive (p.7, "generalement numerique et additive").
+ * Identifiant SQL. On ne met des guillemets QUE si le nom l'exige : sous
+ * Oracle, "codeP" entre guillemets devient sensible a la casse et ne designe
+ * plus la meme colonne que codeP. Les quoter tous casserait l'usage normal ;
+ * n'en quoter aucun produit du SQL invalide des qu'un nom contient un espace.
  */
-function reaggregate(agg, fromDetail) {
-  if (fromDetail) return { fn: agg, note: null }
-  if (agg === 'COUNT') return { fn: 'SUM', note: null }
-  if (agg === 'AVG') {
-    return {
-      fn: 'AVG',
-      note: 'AVG n’est pas additive : a recalculer depuis les donnees detaillees',
+export function sqlName(name) {
+  return /^[A-Za-z][A-Za-z0-9_$#]*$/.test(name) ? name : `"${String(name).replace(/"/g, '""')}"`
+}
+
+/**
+ * Colonnes de mesures d'une vue agregee.
+ *
+ * Re-agreger n'utilise pas toujours la fonction de la premiere passe : un
+ * COUNT se cumule en SUM. Et une MOYENNE ne se re-agrege pas du tout -- la
+ * moyenne des moyennes n'est pas la moyenne (p.7, "generalement numerique et
+ * additive"). Plutot que d'emettre un AVG faux avec un commentaire d'excuse,
+ * on stocke de quoi la recalculer : sa somme et son effectif, tous deux
+ * additifs. La moyenne se lit alors `<mesure>_som / <mesure>_nb`.
+ */
+function measureColumns(measures, fromDetail) {
+  const cols = []
+  const notes = []
+  for (const m of measures) {
+    const nom = sqlName(m.name)
+    const som = sqlName(`${m.name}_som`)
+    const nb = sqlName(`${m.name}_nb`)
+    if (m.agg === 'AVG') {
+      cols.push(`       ${fromDetail ? `SUM(${nom})` : `SUM(${som})`} AS ${som}`)
+      cols.push(`       ${fromDetail ? `COUNT(${nom})` : `SUM(${nb})`} AS ${nb}`)
+      notes.push(`-- ${m.name} : moyenne = ${m.name}_som / ${m.name}_nb (AVG n'est pas additive)`)
+    } else if (m.agg === 'COUNT') {
+      cols.push(`       ${fromDetail ? 'COUNT' : 'SUM'}(${nom}) AS ${nom}`)
+    } else {
+      cols.push(`       ${m.agg}(${nom}) AS ${nom}`)
     }
   }
-  return { fn: agg, note: null }
+  return { cols, notes }
 }
 
 /** Vues materialisees Oracle correspondant au treillis partiel (p.62). */
@@ -260,27 +283,106 @@ export function toSql(dimensions, measures, materializedKeys, factName = 'FAITS'
       const groupBy = node
         .map((_, d) => levelName(node, dimensions, d))
         .filter((name) => name !== ALL)
+        .map(sqlName)
       const from = sourceOf.get(key) ?? base
-      const notes = []
-      const cols = measures.map((m) => {
-        const { fn, note } = reaggregate(m.agg, from === base)
-        if (note) notes.push(`-- ${m.name} : ${note}`)
-        return `       ${fn}(${m.name}) AS ${m.name}`
-      })
+      const { cols, notes } = measureColumns(measures, from === base)
       const select = [...groupBy.map((g) => `       ${g}`), ...cols].join(',\n')
       const lines = [
         ...notes,
-        `CREATE MATERIALIZED VIEW ${names.get(key)}`,
+        `CREATE MATERIALIZED VIEW ${sqlName(names.get(key))}`,
         'BUILD IMMEDIATE REFRESH COMPLETE ON DEMAND',
         'AS SELECT',
         select,
-        `FROM ${names.get(from)}`,
+        `FROM ${sqlName(names.get(from))}`,
       ]
       if (groupBy.length > 0) lines.push(`GROUP BY ${groupBy.join(', ')};`)
       else lines[lines.length - 1] += ';'
       return lines.join('\n')
     })
     .join('\n\n')
+}
+
+/**
+ * Elague une selection devenue incoherente avec les dimensions.
+ *
+ * Les cles de noeuds encodent des indices de niveau : retirer une dimension ou
+ * raccourcir une hierarchie les rend caduques. Fonction PURE, pour deux
+ * usages : l'appliquer a l'etat courant, et la simuler sur des dimensions
+ * hypothetiques afin de chiffrer ce qu'une suppression couterait AVANT de la
+ * faire.
+ *
+ * `dimensions` doit deja etre filtre : une dimension sans niveau n'est pas un
+ * axe et ne compte pas dans l'arite des cles.
+ */
+export function pruneSelection(selection, dimensions) {
+  const sizes = dimensions.map((d) => d.levels.length + 1)
+  const base = baseKey(dimensions)
+
+  const materialized = sortKeys(
+    new Set(
+      (selection.materialized ?? []).filter((key) => {
+        const node = parseKey(key)
+        return (
+          key !== base && // la table de faits est implicite, jamais listee
+          node.length === sizes.length &&
+          node.every((v, i) => Number.isInteger(v) && v >= 0 && v < sizes[i])
+        )
+      }),
+    ),
+  )
+
+  const presents = new Set([...materialized, base])
+
+  // une source qui n'est plus materialisee, ou devenue trop grossiere apres un
+  // remaniement des niveaux, redevient automatique plutot que de pointer dans
+  // le vide
+  const sources = Object.fromEntries(
+    Object.entries(selection.sources ?? {}).filter(
+      ([to, from]) =>
+        presents.has(to) &&
+        presents.has(from) &&
+        validSources(to, materialized, dimensions).includes(from),
+    ),
+  )
+
+  const analyses = (selection.analyses ?? []).map((a, i) => {
+    const { target, ...reste } = a
+    const levels = dimensions.map((d, j) => {
+      const v = a.levels?.[j]
+      return Number.isInteger(v) && v >= 0 && v <= d.levels.length ? v : 0
+    })
+    const dispo = new Set(availableWeak(levels, dimensions).map((w) => w.name))
+    return {
+      ...reste,
+      id: a.id ?? `an${i}`,
+      levels,
+      // un attribut faible ne vaut qu'au niveau dont il depend : changer ce
+      // niveau le retire de l'analyse
+      extras: (a.extras ?? []).filter((x) => dispo.has(x)),
+      // un rattachement impose vers un agregat supprime redevient automatique
+      ...(target && presents.has(target) ? { target } : {}),
+    }
+  })
+
+  // une fleche libre dont une extremite a disparu n'a plus de sens
+  const ancres = new Set([...presents, ...analyses.map((a) => `A:${a.id}`)])
+  const freeArrows = (selection.freeArrows ?? []).filter(
+    (f) => ancres.has(f.from) && ancres.has(f.to),
+  )
+
+  return { materialized, sources, analyses, freeArrows }
+}
+
+/** Ce qu'une selection contient de choix explicites -- ce qu'on perdrait a
+ *  l'elaguer. Les analyses survivent toujours, mais leur rattachement impose
+ *  peut sauter : il compte. */
+export function selectionSize(selection) {
+  return (
+    (selection.materialized?.length ?? 0) +
+    Object.keys(selection.sources ?? {}).length +
+    (selection.freeArrows?.length ?? 0) +
+    (selection.analyses ?? []).filter((a) => a.target).length
+  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -414,12 +516,14 @@ export function fromOlapSchema(json) {
 
   const dimensions = json.dimensions.map((d) => {
     const nameOf = new Map((d.parameters ?? []).map((p) => [p.id, p.name]))
-    // plusieurs hierarchies = plusieurs axes possibles ; l'UI laisse choisir,
-    // la premiere sert de defaut
+
     // p.8 : un attribut faible complete la semantique d'UN parametre
     const weakOf = new Map(
       (d.parameters ?? []).map((p) => [p.name, (p.weakAttributes ?? []).map((w) => w.name)]),
     )
+
+    // plusieurs hierarchies = plusieurs axes possibles ; l'UI laisse choisir,
+    // la premiere sert de defaut
     const hierarchies = (d.hierarchies ?? [])
       .map((h) => ({
         name: h.name || 'H',

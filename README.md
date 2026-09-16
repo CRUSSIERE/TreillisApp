@@ -154,7 +154,23 @@ se recalcule pas toujours avec la même fonction :
 |---|---|---|
 | `SUM`, `MIN`, `MAX` | identique | identique |
 | `COUNT` | `COUNT` | `SUM` — on cumule des comptes |
-| `AVG` | `AVG` | **non additive** : un commentaire signale qu'il faut repartir du détail |
+| `AVG` | `SUM` + `COUNT` | `SUM` des deux colonnes |
+
+Une **moyenne ne se ré-agrège pas** : la moyenne des moyennes n'est pas la
+moyenne. Plutôt que d'émettre un `AVG` faux, l'app stocke de quoi la
+recalculer — sa somme et son effectif, tous deux additifs — et donne la
+formule en commentaire :
+
+```sql
+-- montant : moyenne = montant_som / montant_nb (AVG n'est pas additive)
+       SUM(montant_som) AS montant_som,
+       SUM(montant_nb)  AS montant_nb
+```
+
+Les identifiants ne sont mis entre guillemets que lorsqu'ils l'exigent : un
+niveau nommé `mon niveau` donne `GROUP BY "mon niveau"`, tandis que `codeP`
+reste nu — sous Oracle, `"codeP"` entre guillemets devient sensible à la casse
+et ne désignerait plus la même colonne.
 
 ## Exemple : reproduire la planche p.35
 
@@ -263,9 +279,14 @@ par **Importer JSON** (sélection des agrégats comprise) :
 ```
 
 Retirer une dimension ou raccourcir une hiérarchie rend certaines clés
-caduques : elles sont élaguées silencieusement à l'import et à chaque
-modification de structure. Ajouter un niveau en fin de hiérarchie ne perd
-aucune sélection.
+caduques. Avant une telle suppression, l'app **chiffre ce qui serait perdu**
+et demande confirmation — elle n'a pas d'annulation, et un clic malheureux
+effaçait auparavant en silence un treillis partiel construit à la main. Elle
+ne demande rien quand rien n'est perdu : ajouter un niveau en fin de
+hiérarchie, par exemple, conserve toute la sélection.
+
+À l'import, en revanche, les clés caduques sont élaguées sans question : le
+fichier fait foi.
 
 ## Export image
 
@@ -292,10 +313,11 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-40 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+46 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
-SQL de la p.62, les attributs faibles, le tracé des liens qui enjambent une
-rangée, le round-trip JSON, et la conversion depuis le format
+SQL de la p.62, la décomposition des moyennes, l'échappement des identifiants,
+les attributs faibles, l'élagage de la sélection, le tracé des liens qui
+enjambent une rangée, le round-trip JSON, et la conversion depuis le format
 d'appmodelisationolap.
 
 ## Déploiement sur GitHub Pages

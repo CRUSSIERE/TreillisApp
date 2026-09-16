@@ -23,7 +23,10 @@ import {
   analysisIssue,
   analysisSource,
   parseKey,
+  pruneSelection,
+  selectionSize,
   sortKeys,
+  sqlName,
   validSources,
   toOwnFormat,
   toSql,
@@ -149,19 +152,6 @@ check('p.62 -- le SQL chaine Agg2 sur Agg1 et supprime les niveaux All', () => {
   assert.ok(!/All/.test(bloc2), 'le niveau All ne se projette pas en colonne')
 })
 
-check('p.7 -- COUNT se re-agrege en SUM, AVG est signalee non additive', () => {
-  const sql = toSql(
-    p35,
-    [{ name: 'nb', agg: 'COUNT' }, { name: 'moy', agg: 'AVG' }],
-    [AGG1, AGG2],
-    'VENTES',
-  )
-  const [bloc1, bloc2] = sql.split('\n\n')
-  assert.match(bloc1, /COUNT\(nb\)/, 'premiere passe : COUNT sur les donnees detaillees')
-  assert.match(bloc2, /SUM\(nb\)/, 'seconde passe : le COUNT se cumule en SUM')
-  assert.match(bloc2, /-- moy : AVG/, 'AVG doit porter un avertissement')
-})
-
 check('sources -- forcer Agg2 sur la table de faits court-circuite Agg1', () => {
   const liens = derivations([AGG1, AGG2], p35, { [AGG2]: BASE })
   const vers2 = liens.find((l) => l.to === AGG2)
@@ -270,6 +260,81 @@ check('affichage -- une dimension a All se tait dans le libelle', () => {
 check('affichage -- taire All ne confond pas deux noeuds distincts', () => {
   const vus = new Set(buildLattice(p34).nodes.map((n) => displayLabel(n.index, p34)))
   assert.equal(vus.size, 16, 'les 16 noeuds restent discernables')
+})
+
+/* --- SQL : identifiants et mesures non additives ------------------------ */
+
+check('SQL -- seuls les identifiants qui l’exigent sont entre guillemets', () => {
+  assert.equal(sqlName('codeP'), 'codeP', 'un nom ordinaire reste nu')
+  assert.equal(sqlName('num_mois'), 'num_mois')
+  assert.equal(sqlName('mon niveau'), '"mon niveau"', 'un espace impose les guillemets')
+  assert.equal(sqlName('2023'), '"2023"', 'un identifiant ne commence pas par un chiffre')
+  assert.equal(sqlName('a"b'), '"a""b"', 'le guillemet interne est double')
+})
+
+check('SQL -- un nom avec espace produit du SQL valide, pas casse en deux', () => {
+  // le niveau fautif doit etre au-dessus de la cle, sinon le seul noeud
+  // materialisable est la base elle-meme et aucune vue n'est generee
+  const dims = [{ name: 'T', levels: ['codeT', 'mon niveau'], weak: {} }]
+  const sql = toSql(dims, [{ name: 'montant', agg: 'SUM' }], ['1'], 'VENTES')
+  assert.match(sql, /GROUP BY "mon niveau";/)
+  assert.ok(!/GROUP BY mon niveau/.test(sql), 'sans guillemets, Oracle refuserait')
+})
+
+check('p.7 -- AVG est decomposee en somme + effectif, jamais moyennee deux fois', () => {
+  const sql = toSql(p35, [{ name: 'note', agg: 'AVG' }], [AGG1, AGG2], 'VENTES')
+  const [bloc1, bloc2] = sql.split('\n\n')
+
+  // premiere passe, depuis le detail : on stocke de quoi recalculer
+  assert.match(bloc1, /SUM\(note\) AS note_som/)
+  assert.match(bloc1, /COUNT\(note\) AS note_nb/)
+  // seconde passe : les deux colonnes se cumulent, toutes deux additives
+  assert.match(bloc2, /SUM\(note_som\) AS note_som/)
+  assert.match(bloc2, /SUM\(note_nb\) AS note_nb/)
+
+  // le piege d'origine : une moyenne de moyennes
+  assert.ok(!/AVG\(/.test(sql), 'aucun AVG ne doit subsister dans les vues agregees')
+  assert.match(sql, /moyenne = note_som \/ note_nb/, 'la formule de lecture est donnee')
+})
+
+check('p.7 -- COUNT se cumule toujours en SUM a la seconde passe', () => {
+  const sql = toSql(p35, [{ name: 'nb', agg: 'COUNT' }], [AGG1, AGG2], 'VENTES')
+  const [bloc1, bloc2] = sql.split('\n\n')
+  assert.match(bloc1, /COUNT\(nb\) AS nb/)
+  assert.match(bloc2, /SUM\(nb\) AS nb/)
+})
+
+/* --- elagage de la selection -------------------------------------------- */
+
+const selection = {
+  materialized: [AGG1, AGG2],
+  sources: { [AGG2]: BASE },
+  analyses: [{ id: 'a1', name: 'A1', measure: 'quantite', levels: [0, 1, 0], extras: [], target: AGG1 }],
+  freeArrows: [{ from: BASE, to: AGG1, label: '' }],
+}
+
+check('elagage -- une selection coherente traverse sans rien perdre', () => {
+  const apres = pruneSelection(selection, p35)
+  assert.deepEqual(apres.materialized, [AGG1, AGG2])
+  assert.deepEqual(apres.sources, { [AGG2]: BASE })
+  assert.equal(apres.freeArrows.length, 1)
+  assert.equal(apres.analyses[0].target, AGG1)
+  assert.equal(selectionSize(apres), selectionSize(selection))
+})
+
+check('elagage -- retirer une dimension rend tout caduc, et ca se chiffre', () => {
+  const ampute = p35.slice(0, 2) // CLIENTS disparait : l'arite des cles change
+  const apres = pruneSelection(selection, ampute)
+  assert.deepEqual(apres.materialized, [], 'aucune cle a 3 composantes ne survit')
+  assert.deepEqual(apres.sources, {})
+  assert.deepEqual(apres.freeArrows, [])
+  assert.equal(selectionSize(selection) - selectionSize(apres), 5, 'la perte est mesurable')
+})
+
+check('elagage -- ne touche pas a la selection qu’on lui passe', () => {
+  const copie = JSON.parse(JSON.stringify(selection))
+  pruneSelection(selection, p35.slice(0, 2))
+  assert.deepEqual(selection, copie, 'fonction pure : simuler une perte ne doit rien casser')
 })
 
 /* --- attributs faibles -------------------------------------------------- */
