@@ -18,6 +18,7 @@ import {
   labelOf,
   latticeSize,
   parseKey,
+  sortKeys,
   toOwnFormat,
   toSql,
 } from './lattice.js'
@@ -151,6 +152,18 @@ check('p.7 -- COUNT se re-agrege en SUM, AVG est signalee non additive', () => {
   assert.match(bloc1, /COUNT\(nb\)/, 'premiere passe : COUNT sur les donnees detaillees')
   assert.match(bloc2, /SUM\(nb\)/, 'seconde passe : le COUNT se cumule en SUM')
   assert.match(bloc2, /-- moy : AVG/, 'AVG doit porter un avertissement')
+})
+
+check('panneau -- sortKeys range les agregats comme aggregateNames les nomme', () => {
+  // un ordre d'ajout quelconque : le panneau doit tout de meme lire Agg1, Agg2...
+  const desordre = ['3,2,0', '2,0,1', '0,1,0']
+  const tries = sortKeys(desordre)
+  const noms = aggregateNames(desordre, p35, 'VENTES')
+  assert.deepEqual(
+    tries.map((k) => noms.get(k)),
+    ['Agg1', 'Agg2', 'Agg3'],
+  )
+  assert.deepEqual(sortKeys(desordre), sortKeys(tries), 'le tri doit etre idempotent')
 })
 
 /* --- format de travail : export puis import ---------------------------- */

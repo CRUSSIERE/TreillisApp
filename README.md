@@ -15,7 +15,7 @@ dépendance : trois fichiers statiques.
   dimension, augmenté du niveau `All`. Deux dimensions de trois niveaux
   donnent 4 × 4 = 16 nœuds, exactement la planche p.34. Les arêtes sont les
   roll-up : une arête ne remonte **qu'une** dimension, **d'un** niveau.
-- **Treillis partiel** — on clique les nœuds à matérialiser. L'app en déduit
+- **Treillis partiel** — on choisit les agrégats à matérialiser. L'app en déduit
   les arêtes de dérivation : chaque agrégat se calcule depuis son **plus
   proche ancêtre matérialisé**, pas depuis les données détaillées. C'est ce
   qui donne la chaîne `VENTES → Agg1 → Agg2` de la p.35 plutôt que deux
@@ -34,14 +34,34 @@ il fait partie du treillis.
 
 Au chargement, l'app est pré-remplie avec l'exemple VENTES du cours.
 
-### Basculer complet / partiel
+### Construire un treillis partiel
 
-Le commutateur en haut à gauche. En mode complet, **cliquer un nœud** le
-marque comme matérialisé (il passe en bleu). En mode partiel, seuls les nœuds
-marqués restent affichés, reliés par leurs arêtes de dérivation et nommés
-`Agg1`, `Agg2`… dans l'ordre topologique. Le nœud de base — les données
-détaillées — est toujours matérialisé : c'est la table de faits elle-même, il
-n'est pas décochable.
+Un treillis partiel, c'est une liste d'agrégats à matérialiser. Deux façons de
+la remplir, qui modifient la même chose :
+
+1. **Panneau « Agrégats à matérialiser »**, tout en bas à gauche. *+ agrégat*
+   ajoute une ligne, et la ligne porte **une liste déroulante par dimension** :
+   on y choisit le niveau. C'est la voie sûre — pas besoin de retrouver le nœud
+   à l'œil, et elle marche dans les deux modes.
+2. **Clic sur un nœud du canvas**, en mode *Treillis complet* : il passe en
+   bleu. Pratique sur un petit treillis, vite pénible au-delà de quelques
+   dizaines de nœuds.
+
+Exemple, pour obtenir `codeP, num_mois, codeC` : *+ agrégat*, puis PRODUITS →
+`codeP`, TEMPS → `num_mois`, CLIENTS → `codeC`.
+
+Le commutateur en haut à gauche bascule l'affichage. En mode **partiel**, seuls
+les agrégats retenus restent visibles, reliés par leurs arêtes de dérivation et
+nommés `Agg1`, `Agg2`… dans l'ordre topologique — l'ordre où le panneau les
+liste, lui aussi.
+
+Deux règles pour éviter les impasses :
+
+- les **données détaillées** sont toujours là et ne se décochent pas : c'est la
+  table de faits, la source de tout le reste. Elle n'apparaît donc pas dans la
+  liste des agrégats ;
+- amener un agrégat sur un nœud déjà retenu **fusionne** les deux lignes, il
+  n'y a jamais de doublon.
 
 ### Re-agrégation des mesures
 
@@ -68,9 +88,17 @@ Agg1    = codeP, num_mois, codeC   analyse A1 : Sum(Qte) par Num_Mois, CodeP, Co
 Agg2    = All, annee, codeC        analyse A2 : Sum(Montant) par Annee, Nom
 ```
 
-Trois dimensions de trois niveaux, et deux nœuds cochés : `codeP, num_mois,
-codeC` et `annee, codeC`. Deux écarts d'affichage avec la planche, sans
-conséquence sur le treillis lui-même :
+À la main, cela revient à saisir trois dimensions de trois niveaux — PRODUITS
+`codeP / sous_categ / categorie`, TEMPS `codeT / num_mois / annee`, CLIENTS
+`codeC / ville / pays` — puis à créer deux agrégats dans le panneau :
+
+| Agrégat | PRODUITS | TEMPS | CLIENTS |
+|---|---|---|---|
+| Agg1 | `codeP` | `num_mois` | `codeC` |
+| Agg2 | `All` | `annee` | `codeC` |
+
+Deux écarts d'affichage avec la planche, sans conséquence sur le treillis
+lui-même :
 
 - l'app écrit `All, annee, codeC` là où la planche écrit `annee, codeC` — une
   dimension au niveau `All` reste affichée, comme sur la planche p.34
@@ -151,7 +179,7 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-18 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+19 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, le SQL de la p.62, le round-trip JSON, et la
 conversion depuis le format d'appmodelisationolap.
 

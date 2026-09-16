@@ -66,6 +66,12 @@
   .dim .levels { margin: 6px 0 0 10px; padding-left: 10px; border-left: 2px solid var(--line); }
   .dim .all { color: var(--muted); font-style: italic; padding: 5px 0 0 8px; font-size: 13px; }
   .add { width: 100%; margin-top: 4px; }
+  .row .grow { flex: 1; }
+  .dlabel {
+    flex: none; width: 86px; font-size: 12px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .row select[data-field="agg-level"] { flex: 1; min-width: 0; }
   .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
 
   #view { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -118,8 +124,8 @@
 <script type="module">
 import {
   AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
-  derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, latticeSize,
-  parseKey, toOwnFormat, toSql,
+  derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, keyOf, latticeSize,
+  parseKey, sortKeys, toOwnFormat, toSql,
 } from './lattice.js'
 
 /* ------------------------------------------------------------------ */
@@ -158,14 +164,23 @@ const axes = () => state.dimensions.filter((d) => d.levels.length > 0)
  *  ou raccourcie les rend caduques. On elague plutot que de tout effacer --
  *  ajouter un niveau en fin de hierarchie ne perd aucune selection. */
 function pruneMaterialized() {
-  const sizes = axes().map((d) => d.levels.length + 1)
-  state.materialized = state.materialized.filter((key) => {
-    const node = parseKey(key)
-    return (
-      node.length === sizes.length &&
-      node.every((v, i) => Number.isInteger(v) && v >= 0 && v < sizes[i])
-    )
-  })
+  const dims = axes()
+  const sizes = dims.map((d) => d.levels.length + 1)
+  const base = baseKey(dims)
+  // trie : sans ca le panneau listerait les agregats dans l'ordre d'ajout
+  // alors que leurs noms (Agg1, Agg2...) suivent l'ordre topologique
+  state.materialized = sortKeys(
+    new Set(
+      state.materialized.filter((key) => {
+        const node = parseKey(key)
+        return (
+          key !== base && // la table de faits est implicite, jamais listee
+          node.length === sizes.length &&
+          node.every((v, i) => Number.isInteger(v) && v >= 0 && v < sizes[i])
+        )
+      }),
+    ),
+  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -242,7 +257,56 @@ function renderPanel() {
     <p class="hint">Niveaux ordonnés du plus fin (la clé) au plus général.</p>
     ${dims}
     <button class="add" data-act="add-dim">+ dimension</button>
+
+    <h2>Agrégats à matérialiser</h2>
+    ${renderAggregates()}
   `
+}
+
+/** Construction explicite du treillis partiel : un agregat = un niveau par
+ *  dimension, choisi dans une liste. Le clic sur le canvas fait la meme chose,
+ *  mais devient impraticable des que le treillis complet compte des dizaines
+ *  de noeuds -- et en mode partiel les noeuds non materialises ne sont plus
+ *  affiches, donc il n'y a rien a cliquer. */
+function renderAggregates() {
+  const dims = axes()
+  if (dims.length === 0) return '<p class="hint">Définis d’abord une dimension.</p>'
+
+  const names = aggregateNames(state.materialized, dims, state.factName)
+  const rows = state.materialized
+    .map((key, i) => {
+      const node = parseKey(key)
+      const selects = dims
+        .map(
+          (d, di) => `<div class="row">
+            <span class="dlabel">${esc(d.name)}</span>
+            <select data-field="agg-level" data-i="${i}" data-d="${di}">
+              ${[...d.levels, ALL]
+                .map(
+                  (lv, li) =>
+                    `<option value="${li}"${li === node[di] ? ' selected' : ''}>${esc(lv)}</option>`,
+                )
+                .join('')}
+            </select>
+          </div>`,
+        )
+        .join('')
+      return `<div class="dim">
+        <div class="row">
+          <strong class="grow">${esc(names.get(key) ?? '')}</strong>
+          <button class="icon" data-act="del-agg" data-i="${i}" title="Retirer cet agrégat">&times;</button>
+        </div>
+        ${selects}
+      </div>`
+    })
+    .join('')
+
+  return `
+    <p class="hint">Un agrégat = un niveau par dimension.
+      <em>${ALL}</em> agrège la dimension entièrement.
+      Les données détaillées (${esc(state.factName)}) sont toujours là, implicitement.</p>
+    ${rows}
+    <button class="add" data-act="add-agg">+ agrégat</button>`
 }
 
 /* ------------------------------------------------------------------ */
@@ -447,6 +511,24 @@ $('#panel').addEventListener('click', (e) => {
     case 'del-measure':
       state.measures.splice(m, 1)
       break
+    case 'add-agg': {
+      // premier noeud libre dans l'ordre du treillis : jamais un doublon,
+      // jamais la base, et le meme a chaque fois
+      const dims = axes()
+      const used = new Set([...state.materialized, baseKey(dims)])
+      let free
+      try {
+        free = buildLattice(dims).nodes.find((n) => !used.has(n.key))
+      } catch {
+        return // treillis trop grand : le canvas affiche deja l'erreur
+      }
+      if (!free) return
+      state.materialized.push(free.key)
+      break
+    }
+    case 'del-agg':
+      state.materialized.splice(Number(btn.dataset.i), 1)
+      break
     default:
       return
   }
@@ -473,6 +555,14 @@ $('#panel').addEventListener('change', (e) => {
   if (el.dataset.field === 'measure-agg') {
     state.measures[Number(el.dataset.m)].agg = el.value
     renderCanvas()
+  } else if (el.dataset.field === 'agg-level') {
+    const i = Number(el.dataset.i)
+    const node = parseKey(state.materialized[i])
+    node[Number(el.dataset.d)] = Number(el.value)
+    // un agregat amene sur un voisin deja present fusionne avec lui :
+    // pruneMaterialized dedoublonne, la ligne en trop disparait
+    state.materialized[i] = keyOf(node)
+    render()
   } else if (el.dataset.field === 'hier') {
     const dim = state.dimensions[Number(el.dataset.d)]
     const chosen = dim.hierarchies.find((h) => h.name === el.value)

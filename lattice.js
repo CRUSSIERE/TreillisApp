@@ -95,6 +95,11 @@ function byRankThenKey(x, y) {
   return rankOf(parseKey(x)) - rankOf(parseKey(y)) || x.localeCompare(y)
 }
 
+/** Ordre canonique d'une selection d'agregats. C'est celui dont
+ *  `aggregateNames` tire Agg1, Agg2... : trier la selection avec lui garde
+ *  toute liste affichee dans le meme ordre que les noms. */
+export const sortKeys = (keys) => [...keys].sort(byRankThenKey)
+
 /**
  * Treillis partiel (p.35) : chaque agregat materialise se calcule depuis son
  * plus proche ancetre materialise, pas depuis les donnees detaillees --
