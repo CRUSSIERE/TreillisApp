@@ -147,12 +147,12 @@
 import {
   AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
   derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, keyOf, latticeSize,
-  labelOf, parseKey, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
+  labelOf, linkPath, parseKey, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
   // ?v= : index.html et lattice.js ont chacun leur cache de 10 min sur
   // GitHub Pages. Sans ce marqueur, une page fraiche peut charger un module
   // perime, qui n'exporte pas encore ce qu'elle importe -> page blanche.
   // A INCREMENTER a chaque modification de lattice.js.
-} from './lattice.js?v=2'
+} from './lattice.js?v=3'
 
 /* ------------------------------------------------------------------ */
 /* Etat                                                                */
@@ -470,6 +470,10 @@ const SVG_STYLE = `
 `
 
 const nodeWidth = (label) => Math.max(92, label.length * 7 + 26)
+/** l'etiquette est posee a droite de la boite : elle occupe de la place dans
+ *  la rangee, sinon elle se superpose a la boite suivante */
+const tagWidth = (tag) => (tag ? 8 + tag.length * 6.2 : 0)
+const slotWidth = (item) => nodeWidth(item.label) + tagWidth(item.tag)
 
 /**
  * Disposition en couches par rang : rang 0 (donnees detaillees) EN BAS,
@@ -479,29 +483,29 @@ const nodeWidth = (label) => Math.max(92, label.length * 7 + 26)
  * croisements ; passer a un tri barycentrique si les aretes deviennent
  * illisibles au-dela de 3 dimensions.
  */
-function layout(nodes, analyses, gutter = 0) {
+function layout(nodes, analyses) {
   const ranks = [...new Set(nodes.map((n) => n.rank))].sort((a, b) => a - b)
   const rows = ranks.map((r) => nodes.filter((n) => n.rank === r))
   if (analyses.length) rows.push(analyses)
 
-  const widths = rows.map((row) => row.reduce((w, n) => w + nodeWidth(n.label) + GAP_X, -GAP_X))
-  // gouttiere symetrique : les rangees restent centrees, et l'etiquette posee
-  // a droite d'une boite du bord a la place de s'afficher
-  const width = Math.max(...widths, 200) + MARGIN * 2 + gutter * 2
+  const widths = rows.map((row) => row.reduce((w, n) => w + slotWidth(n) + GAP_X, -GAP_X))
+  const width = Math.max(...widths, 200) + MARGIN * 2
   const step = NODE_H + GAP_Y
 
   const placed = new Map()
+  const rowBounds = []
   rows.forEach((row, r) => {
     let x = (width - widths[r]) / 2
     const y = MARGIN + (rows.length - 1 - r) * step // r = 0 tout en bas
+    const left = x
     for (const n of row) {
-      const w = nodeWidth(n.label)
-      placed.set(n.key, { ...n, x, y, w, h: NODE_H })
-      x += w + GAP_X
+      placed.set(n.key, { ...n, x, y, w: nodeWidth(n.label), h: NODE_H, row: r })
+      x += slotWidth(n) + GAP_X
     }
+    rowBounds.push({ left, right: x - GAP_X })
   })
 
-  return { placed, width, height: MARGIN * 2 + rows.length * step - GAP_Y }
+  return { placed, width, height: MARGIN * 2 + rows.length * step - GAP_Y, rowBounds }
 }
 
 function renderCanvas() {
@@ -549,14 +553,15 @@ function renderCanvas() {
     }
   })
 
-  // la plus longue etiquette fixe la gouttiere, sinon elle deborde du canvas
-  const tagRoom =
-    Math.max(0, ...nodes.map((n) => tagOf(n.key).length), ...analyses.map((a) => a.tag.length)) * 6.2
-  const { placed, width, height } = layout(nodes, analyses, tagRoom ? tagRoom + 16 : 0)
+  const items = nodes.map((n) => ({ ...n, tag: tagOf(n.key) }))
+  const { placed, width, height, rowBounds } = layout(items, analyses)
 
   const edges = partial
     ? derivations([...mats], dims, state.sources).map((e) => ({ ...e, deriv: true }))
     : lattice.edges
+
+  // de quoi elargir le canvas si un lien doit contourner par la droite
+  let maxX = width
 
   // `from` est toujours le noeud le plus fin, donc le plus bas : la fleche monte
   const edgeSvg = edges
@@ -564,23 +569,40 @@ function renderCanvas() {
       const a = placed.get(from)
       const b = placed.get(to)
       if (!a || !b) return ''
+      const { d, maxX: mx } = linkPath(
+        a.x + a.w / 2, a.y,
+        b.x + b.w / 2, b.y + b.h + (deriv ? 7 : 0),
+        a.row, b.row, rowBounds,
+      )
+      maxX = Math.max(maxX, mx)
       const cls = `edge${deriv ? ' deriv' : ''}${forced ? ' forced' : ''}`
       const marker = deriv ? ' marker-end="url(#arrow)"' : ''
-      return `<line class="${cls}" x1="${a.x + a.w / 2}" y1="${a.y}" ` +
-        `x2="${b.x + b.w / 2}" y2="${b.y + b.h + (deriv ? 7 : 0)}"${marker}/>`
+      const titre = deriv
+        ? `${names.get(to) ?? to} calculé depuis ${names.get(from) ?? from}` +
+          (forced ? ' (source imposée)' : '')
+        : ''
+      return `<path class="${cls}" d="${d}"${marker}>${titre ? `<title>${esc(titre)}</title>` : ''}</path>`
     })
     .join('')
 
   // l'analyse est au-dessus de son agregat : cette fleche-la descend
   const analysisSvg = analyses
-    .map((a) => {
-      const from = placed.get(a.key)
-      const to = placed.get(a.target)
+    .map((an) => {
+      const from = placed.get(an.key)
+      const to = placed.get(an.target)
       if (!from || !to) return ''
-      return `<line class="edge analysis" x1="${from.x + from.w / 2}" y1="${from.y + from.h}" ` +
-        `x2="${to.x + to.w / 2}" y2="${to.y - 7}" marker-end="url(#arrow-analyse)"/>`
+      const { d, maxX: mx } = linkPath(
+        from.x + from.w / 2, from.y + from.h,
+        to.x + to.w / 2, to.y - 7,
+        from.row, to.row, rowBounds,
+      )
+      maxX = Math.max(maxX, mx)
+      return `<path class="edge analysis" d="${d}" marker-end="url(#arrow-analyse)">` +
+        `<title>${esc(`${an.label} est servie par ${names.get(an.target) ?? '?'}`)}</title></path>`
     })
     .join('')
+
+  const canvasWidth = Math.max(width, maxX + MARGIN)
 
   const boxSvg = [...placed.values()]
     .map((n) => {
@@ -611,7 +633,7 @@ function renderCanvas() {
     .join('')
 
   host.innerHTML = `<svg id="svg" xmlns="http://www.w3.org/2000/svg"
-      width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+      width="${canvasWidth}" height="${height}" viewBox="0 0 ${canvasWidth} ${height}">
     <style>${SVG_STYLE}</style>
     <defs>
       <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4"
@@ -623,7 +645,7 @@ function renderCanvas() {
         <path d="M0,0 L8,4 L0,8 z" fill="#334155"/>
       </marker>
     </defs>
-    <rect data-export="background" x="0" y="0" width="${width}" height="${height}" fill="#ffffff"/>
+    <rect data-export="background" x="0" y="0" width="${canvasWidth}" height="${height}" fill="#ffffff"/>
     <g data-export="content">${edgeSvg}${analysisSvg}${boxSvg}</g>
   </svg>`
 

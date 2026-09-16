@@ -365,3 +365,31 @@ export function fromOlapSchema(json) {
 
   return { factName, measures, dimensions: dimensions.filter((d) => d.levels.length > 0) }
 }
+
+/* ------------------------------------------------------------------ */
+/* Geometrie du dessin (pure : aucun DOM, donc verifiable ici)        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Trace d'un lien. Entre deux rangees voisines, un segment droit suffit.
+ * Au-dela, une droite passerait DERRIERE les boites intermediaires, qui sont
+ * opaques : le lien paraitrait coupe, voire rattache au mauvais noeud. On le
+ * fait donc contourner par la droite, au large de tout ce qu'il enjambe.
+ */
+export function linkPath(x1, y1, x2, y2, rowA, rowB, rowBounds) {
+  const lo = Math.min(rowA, rowB)
+  const hi = Math.max(rowA, rowB)
+  if (hi - lo <= 1) return { d: `M${x1},${y1} L${x2},${y2}`, maxX: Math.max(x1, x2) }
+
+  let right = Math.max(x1, x2)
+  for (let r = lo + 1; r < hi; r++) right = Math.max(right, rowBounds[r].right)
+  const sommet = right + 26
+
+  // Une cubique n'atteint PAS ses points de controle : avec les deux controles
+  // sur la meme verticale, elle culmine vers 0,25*depart + 0,75*controle. Les
+  // placer pile au large ferait donc passer la courbe sur les boites quand
+  // meme -- on les pousse au-dela pour que le sommet reel tombe ou il faut.
+  const milieu = (x1 + x2) / 2
+  const bx = milieu + (sommet - milieu) / 0.75
+  return { d: `M${x1},${y1} C${bx},${y1} ${bx},${y2} ${x2},${y2}`, maxX: sommet }
+}

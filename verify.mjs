@@ -16,6 +16,7 @@ import {
   fromOlapSchema,
   fromOwnFormat,
   labelOf,
+  linkPath,
   latticeSize,
   analysisSource,
   parseKey,
@@ -223,6 +224,35 @@ check('panneau -- sortKeys range les agregats comme aggregateNames les nomme', (
     ['Agg1', 'Agg2', 'Agg3'],
   )
   assert.deepEqual(sortKeys(desordre), sortKeys(tries), 'le tri doit etre idempotent')
+})
+
+/* --- trace des liens --------------------------------------------------- */
+
+/** abscisse d'une cubique, pour verifier ou la courbe passe vraiment */
+const bezierX = (t, x0, x1, x2, x3) =>
+  (1 - t) ** 3 * x0 + 3 * (1 - t) ** 2 * t * x1 + 3 * (1 - t) * t ** 2 * x2 + t ** 3 * x3
+
+check('trace -- deux rangees voisines restent reliees en ligne droite', () => {
+  const { d } = linkPath(100, 300, 100, 240, 0, 1, [])
+  assert.match(d, /^M100,300 L100,240$/)
+})
+
+check('trace -- un lien qui enjambe une rangee passe AU LARGE de ses boites', () => {
+  // trois rangees enjambees, la plus large s'arretant a x = 260
+  const rangees = [{ right: 200 }, { right: 200 }, { right: 260 }, { right: 200 }]
+  const { d, maxX } = linkPath(100, 300, 100, 120, 0, 3, rangees)
+
+  const [, bx] = d.match(/C([\d.]+),/).map(Number)
+  // la courbe doit reellement depasser 260, pas seulement viser au-dela
+  const sommetReel = Math.max(
+    ...Array.from({ length: 101 }, (_, i) => bezierX(i / 100, 100, bx, bx, 100)),
+  )
+  assert.ok(
+    sommetReel > 260,
+    `la courbe culmine a ${sommetReel.toFixed(1)}, elle traverserait la rangee (bord 260)`,
+  )
+  // et maxX doit annoncer ce sommet, sinon le canvas serait trop etroit
+  assert.ok(Math.abs(sommetReel - maxX) < 1, `sommet ${sommetReel} vs maxX annonce ${maxX}`)
 })
 
 /* --- format de travail : export puis import ---------------------------- */

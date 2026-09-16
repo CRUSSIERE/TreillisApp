@@ -72,6 +72,12 @@ forment la bande du haut — l'orientation de la planche p.35. Les flèches
 bleues montent (un agrégat est calculé depuis ce qui est sous lui), les
 flèches sombres des analyses descendent vers l'agrégat qui les sert.
 
+Un lien qui **enjambe** une rangée — un agrégat calculé depuis deux niveaux
+plus bas, une analyse servie par un agrégat lointain — est tracé en courbe
+qui contourne par la droite. Une droite passerait derrière les boîtes
+intermédiaires, qui sont opaques : le lien paraîtrait coupé, voire rattaché
+au mauvais nœud. Survoler un lien affiche ce qu'il relie.
+
 ### Choisir la source d'un agrégat
 
 Chaque agrégat porte une liste **« calculé depuis »**. Par défaut `auto` :
@@ -231,10 +237,10 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-26 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+28 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
-SQL de la p.62, le round-trip JSON, et la conversion depuis le format
-d'appmodelisationolap.
+SQL de la p.62, le tracé des liens qui enjambent une rangée, le round-trip
+JSON, et la conversion depuis le format d'appmodelisationolap.
 
 ## Déploiement sur GitHub Pages
 
