@@ -163,7 +163,7 @@
  *
  *   >>> INCREMENTER A CHAQUE MODIFICATION D'UN MODULE <<<
  */
-const V = '12'
+const V = '13'
 
 const [modLattice, modRender, modFiles] = await Promise.all([
   import(`./lattice.js?v=${V}`),
@@ -572,8 +572,13 @@ function renderCanvas() {
   const partial = state.mode === 'partial'
   const names = aggregateNames([...mats], dims, state.factName)
 
-  // etiquette posee a droite de chaque boite (VENTES, Agg1...)
-  const tagOf = (key) => (partial ? names.get(key) ?? '' : key === base ? state.factName : '')
+  // Etiquette posee a droite de chaque boite. Entre parentheses, comme sur la
+  // planche p.35 : "(Agg1)", "(Agg2)". Le nom nu sert ailleurs -- listes du
+  // panneau, infobulles, SQL -- donc on parenthese ici et pas dans `names`.
+  const tagOf = (key) => {
+    const nom = partial ? names.get(key) : key === base ? state.factName : ''
+    return nom ? `(${nom})` : ''
+  }
 
   // `All` ne s'affiche pas : une dimension totalement agregee n'apporte rien
   // a la lecture du noeud

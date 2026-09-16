@@ -56,8 +56,10 @@ Exemple, pour obtenir `codeP, num_mois, codeC` : *+ agrégat*, puis PRODUITS →
 
 Le commutateur en haut à gauche bascule l'affichage. En mode **partiel**, seuls
 les agrégats retenus restent visibles, reliés par leurs arêtes de dérivation et
-nommés `Agg1`, `Agg2`… dans l'ordre topologique — l'ordre où le panneau les
-liste, lui aussi.
+nommés `(Agg1)`, `(Agg2)`… dans l'ordre topologique — l'ordre où le panneau
+les liste, lui aussi. Les parenthèses sont celles de la planche ; elles ne
+valent que pour le diagramme : les listes du panneau et le SQL généré gardent
+le nom nu (`FROM Agg1`).
 
 Deux règles pour éviter les impasses :
 
@@ -218,9 +220,6 @@ A2 coche en plus l'attribut faible **`nom`** de `codeC`, ce qui donne le
 
 Deux écarts d'affichage avec la planche, sans conséquence sur le treillis
 lui-même :
-
-Seule différence restante avec la planche : elle place `(Agg1)` et `(Agg2)`
-entre parenthèses à droite des boîtes, l'app les écrit sans parenthèses.
 
 ## Passerelle avec l'app de modélisation OLAP
 
