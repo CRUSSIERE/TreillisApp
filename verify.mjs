@@ -18,7 +18,6 @@ import {
   fromOlapSchema,
   fromOwnFormat,
   labelOf,
-  linkPath,
   latticeSize,
   analysisIssue,
   analysisSource,
@@ -31,6 +30,7 @@ import {
   toOwnFormat,
   toSql,
 } from './lattice.js'
+import { diagramSvg, layout, linkPath, nodeWidth } from './render.js'
 
 let passed = 0
 function check(name, fn) {
@@ -383,6 +383,74 @@ check('fleches libres -- une entree mal formee est ecartee, pas gardee', () => {
     dimensions: [], freeArrows: [{ from: 'x' }, { from: 'a', to: 'b' }, 'nimporte quoi'],
   })
   assert.deepEqual(relu.freeArrows, [{ from: 'a', to: 'b', label: '' }])
+})
+
+/* --- rendu SVG ---------------------------------------------------------- */
+
+/** petit modele complet : deux noeuds, une analyse, une fleche libre */
+const modele = () => ({
+  items: [
+    { key: '0,0', rank: 0, label: 'codeP, codeT', tag: 'VENTES' },
+    { key: '0,1', rank: 1, label: 'codeP, num_mois', tag: 'Agg1' },
+  ],
+  analyses: [
+    { key: 'A:a1', rank: 0, label: 'A1', tag: 'SUM(q)', target: '0,1', issue: [] },
+  ],
+  edges: [{ from: '0,0', to: '0,1', deriv: true, forced: false }],
+  freeArrows: [{ from: '0,0', to: 'A:a1', label: 'note' }],
+  names: new Map([['0,0', 'VENTES'], ['0,1', 'Agg1']]),
+  base: '0,0',
+  materialized: new Set(['0,0', '0,1']),
+})
+
+check('rendu -- le SVG porte boites, aretes et styles embarques', () => {
+  const svg = diagramSvg(modele())
+  assert.match(svg, /^<svg id="svg"/)
+  assert.equal((svg.match(/data-key=/g) ?? []).length, 3, 'deux noeuds + une analyse')
+  assert.match(svg, /class="edge deriv"/)
+  assert.match(svg, /class="edge analysis"/)
+  assert.match(svg, /class="edge libre"/)
+  // le fichier exporte doit s'ouvrir seul : styles et marqueurs a l'interieur
+  assert.match(svg, /<style>/)
+  assert.match(svg, /<marker id="arrow"/)
+  assert.match(svg, /data-export="content"/)
+  assert.match(svg, /data-export="background"/)
+})
+
+check('rendu -- un libelle hostile est echappe, jamais injecte', () => {
+  const m = modele()
+  m.items[0].label = '<script>alert(1)</script>'
+  m.freeArrows[0].label = 'a & b "c"'
+  const svg = diagramSvg(m)
+  assert.ok(!svg.includes('<script>'), 'aucune balise ne doit passer')
+  assert.match(svg, /&lt;script&gt;/)
+  assert.match(svg, /a &amp; b &quot;c&quot;/)
+})
+
+check('rendu -- la base et les analyses portent leurs classes', () => {
+  const svg = diagramSvg(modele())
+  assert.match(svg, /class="node base mat"/, 'la table de faits se distingue')
+  assert.match(svg, /class="node analysis"/)
+  // la base n'est pas decochable : pas de curseur de clic
+  const base = svg.slice(svg.indexOf('data-key="0,0"'))
+  assert.ok(!base.slice(0, 40).includes('cursor="pointer"'))
+})
+
+check('rendu -- un rattachement intenable se voit dans le SVG', () => {
+  const m = modele()
+  m.analyses[0].issue = ['TEMPS']
+  const svg = diagramSvg(m)
+  assert.match(svg, /class="edge analysis invalide"/)
+  assert.match(svg, /marker-end="url\(#arrow-invalide\)"/)
+  assert.match(svg, /trop agrégé sur TEMPS/)
+})
+
+check('rendu -- une extremite absente n’est pas dessinee, et ne casse rien', () => {
+  const m = modele()
+  m.freeArrows = [{ from: '0,0', to: 'A:inconnue', label: 'x' }]
+  const svg = diagramSvg(m)
+  assert.ok(!svg.includes('edge libre'), 'la fleche orpheline est ignoree')
+  assert.match(svg, /data-key="0,0"/, 'le reste du diagramme tient')
 })
 
 /* --- trace des liens --------------------------------------------------- */

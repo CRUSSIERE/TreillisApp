@@ -152,13 +152,15 @@
 import {
   AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
   derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, keyOf, latticeSize,
-  analysisIssue, availableWeak, displayLabel, linkPath, parseKey, pruneSelection,
+  analysisIssue, availableWeak, displayLabel, parseKey, pruneSelection,
   selectionSize, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
   // ?v= : index.html et lattice.js ont chacun leur cache de 10 min sur
   // GitHub Pages. Sans ce marqueur, une page fraiche peut charger un module
   // perime, qui n'exporte pas encore ce qu'elle importe -> page blanche.
   // A INCREMENTER a chaque modification de lattice.js.
-} from './lattice.js?v=8'
+} from './lattice.js?v=9'
+import { diagramSvg, esc } from './render.js?v=1'
+import { downloadJson, exportImage } from './files.js?v=1'
 
 /* ------------------------------------------------------------------ */
 /* Etat                                                                */
@@ -185,10 +187,6 @@ const EXEMPLE_COURS = () => ({
 let state = EXEMPLE_COURS()
 
 const $ = (sel) => document.querySelector(sel)
-const esc = (s) =>
-  String(s).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
-
 /** dimensions retenues pour le treillis : une dimension sans niveau n'est pas
  *  un axe. Toute la vue passe par ce filtre, y compris le calcul de la cle de
  *  base -- sinon un clic et un dessin porteraient sur des tuples d'arites
@@ -506,87 +504,6 @@ function renderAggregates() {
 /* Dessin du treillis                                                  */
 /* ------------------------------------------------------------------ */
 
-const NODE_H = 30
-const GAP_X = 18
-const GAP_Y = 62
-const MARGIN = 26
-
-/** Le SVG porte ses propres styles : le fichier exporte doit s'afficher seul,
- *  hors de cette page. Polices systeme uniquement -- une webfont disparait
- *  a la rasterisation en PNG. */
-const SVG_STYLE = `
-  .edge { stroke: #b6bdc8; stroke-width: 1.2; fill: none; }
-  .edge.deriv { stroke: #2f6fd0; stroke-width: 1.8; }
-  .node rect { fill: #fff; stroke: #c3cad4; stroke-width: 1.2; rx: 6; }
-  .node text {
-    font: 12.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    fill: #1c2430; dominant-baseline: middle; text-anchor: middle;
-  }
-  .node.mat rect { fill: #e8f0fc; stroke: #2f6fd0; stroke-width: 1.8; }
-  .node.base rect { fill: #fdf1e2; stroke: #b45309; stroke-width: 1.8; }
-  .node.analysis rect { fill: #effaf1; stroke: #15803d; stroke-width: 1.8; }
-  .edge.analysis { stroke: #334155; stroke-width: 1.6; }
-  /* rattachement impose que l'agregat ne peut pas honorer */
-  .edge.analysis.invalide { stroke: #b91c1c; stroke-dasharray: 4 3; }
-  .edge.libre { stroke: #7c3aed; stroke-width: 1.6; stroke-dasharray: 6 4; }
-  .node text.tag.libre { fill: #7c3aed; }
-  text.tag.libre { font: 10.5px system-ui, sans-serif; fill: #7c3aed; text-anchor: start; }
-  text.tag.libre.centre { text-anchor: middle; }
-  /* pointilles = source choisie a la main, trait plein = calcul automatique */
-  .edge.forced { stroke-dasharray: 5 3; }
-  /* a cote de la boite, pas au-dessus : la pointe de fleche y arrive.
-     Selecteur plus specifique que "node text", sinon l'etiquette reste
-     centree sur son ancre et la boite en recouvre la moitie gauche. */
-  .node text.tag {
-    font: 10.5px system-ui, sans-serif; fill: #6b7684;
-    text-anchor: start; dominant-baseline: middle;
-  }
-`
-
-const nodeWidth = (label) => Math.max(92, label.length * 7 + 26)
-/** l'etiquette est posee a droite de la boite : elle occupe de la place dans
- *  la rangee, sinon elle se superpose a la boite suivante */
-const tagWidth = (tag) => (tag ? 8 + tag.length * 6.2 : 0)
-const slotWidth = (item) => nodeWidth(item.label) + tagWidth(item.tag)
-
-/**
- * Disposition en couches par rang : rang 0 (donnees detaillees) EN BAS,
- * l'agregation monte, et les analyses forment la bande du dessus --
- * l'orientation de la planche p.35.
- * ponytail: ordre lexicographique dans chaque couche, sans reduction de
- * croisements ; passer a un tri barycentrique si les aretes deviennent
- * illisibles au-dela de 3 dimensions.
- */
-function layout(nodes, analyses) {
-  const ranks = [...new Set(nodes.map((n) => n.rank))].sort((a, b) => a - b)
-  const rows = ranks.map((r) => nodes.filter((n) => n.rank === r))
-  if (analyses.length) rows.push(analyses)
-
-  const widths = rows.map((row) => row.reduce((w, n) => w + slotWidth(n) + GAP_X, -GAP_X))
-  const width = Math.max(...widths, 200) + MARGIN * 2
-  const step = NODE_H + GAP_Y
-
-  const placed = new Map()
-  const rowBounds = []
-  rows.forEach((row, r) => {
-    let x = (width - widths[r]) / 2
-    const y = MARGIN + (rows.length - 1 - r) * step // r = 0 tout en bas
-    const left = x
-    for (const n of row) {
-      placed.set(n.key, { ...n, x, y, w: nodeWidth(n.label), h: NODE_H, row: r })
-      x += slotWidth(n) + GAP_X
-    }
-    rowBounds.push({
-      y,
-      left,
-      right: x - GAP_X,
-      boxes: row.map((n) => ({ x: placed.get(n.key).x, w: placed.get(n.key).w })),
-    })
-  })
-
-  return { placed, width, height: MARGIN * 2 + rows.length * step - GAP_Y, rowBounds }
-}
-
 /** Ce que le canvas affiche en ce moment : le panneau des fleches libres ne
  *  doit proposer que des extremites reellement visibles. */
 function drawnBoxes() {
@@ -635,194 +552,52 @@ function renderCanvas() {
   const base = baseKey(dims)
   const mats = new Set([...state.materialized, base])
   const partial = state.mode === 'partial'
-
-  const nodes = partial ? lattice.nodes.filter((n) => mats.has(n.key)) : lattice.nodes
   const names = aggregateNames([...mats], dims, state.factName)
 
   // etiquette posee a droite de chaque boite (VENTES, Agg1...)
   const tagOf = (key) => (partial ? names.get(key) ?? '' : key === base ? state.factName : '')
 
-  // Analyses : une bande au-dessus du treillis, chacune reliee a l'agregat qui
-  // peut y repondre (p.35). La cle prefixee `A:` les distingue des noeuds, qui
-  // sont eux des tuples de chiffres -- aucune collision possible.
-  const analyses = state.analyses.map((a, i) => {
+  // `All` ne s'affiche pas : une dimension totalement agregee n'apporte rien
+  // a la lecture du noeud
+  const items = (partial ? lattice.nodes.filter((n) => mats.has(n.key)) : lattice.nodes).map(
+    (n) => ({ ...n, label: displayLabel(parseKey(n.key), dims), tag: tagOf(n.key) }),
+  )
+
+  // Analyses : une bande au-dessus du treillis. La cle prefixee `A:` les
+  // distingue des noeuds, qui sont des tuples de chiffres -- pas de collision.
+  // On resout ici le rattachement et sa validite : render.js ne connait pas
+  // la semantique OLAP, il ne fait que placer et dessiner.
+  const analyses = state.analyses.map((a) => {
     const measure = state.measures.find((m) => m.name === a.measure)
+    const target = a.target && mats.has(a.target)
+      ? a.target
+      : analysisSource(a.levels, [...mats], dims)
     return {
-      // cle stable : une fleche libre visant cette analyse doit survivre a la
-      // suppression d'une autre, ce qu'un index de position ne permet pas
       key: `A:${a.id}`,
       rank: 0,
       label: a.name,
-      levels: a.levels, // le trace s'en sert pour juger le rattachement
       tag:
         `${measure ? `${measure.agg}(${measure.name}) · ` : ''}` +
         displayLabel(a.levels, dims) +
         (a.extras?.length ? ` + ${a.extras.join(', ')}` : ''),
-      // rattachement impose s'il designe encore un noeud materialise,
-      // sinon celui que l'app calcule
-      target: a.target && mats.has(a.target) ? a.target : analysisSource(a.levels, [...mats], dims),
+      target,
+      issue: analysisIssue(a.levels, target, dims),
     }
   })
-
-  // `All` ne s'affiche pas : une dimension totalement agregee n'apporte rien
-  // a la lecture du noeud
-  const items = nodes.map((n) => ({
-    ...n,
-    label: displayLabel(parseKey(n.key), dims),
-    tag: tagOf(n.key),
-  }))
-  const { placed, width, height, rowBounds } = layout(items, analyses)
 
   const edges = partial
     ? derivations([...mats], dims, state.sources).map((e) => ({ ...e, deriv: true }))
     : lattice.edges
 
-  // de quoi elargir le canvas si un lien doit contourner par la droite
-  let maxX = width
-
-  // `from` est toujours le noeud le plus fin, donc le plus bas : la fleche monte
-  const edgeSvg = edges
-    .map(({ from, to, deriv, forced }) => {
-      const a = placed.get(from)
-      const b = placed.get(to)
-      if (!a || !b) return ''
-      const { d, maxX: mx } = linkPath(
-        a.x + a.w / 2, a.y,
-        b.x + b.w / 2, b.y + b.h + (deriv ? 7 : 0),
-        a.row, b.row, rowBounds,
-      )
-      maxX = Math.max(maxX, mx)
-      const cls = `edge${deriv ? ' deriv' : ''}${forced ? ' forced' : ''}`
-      const marker = deriv ? ' marker-end="url(#arrow)"' : ''
-      const titre = deriv
-        ? `${names.get(to) ?? to} calculé depuis ${names.get(from) ?? from}` +
-          (forced ? ' (source imposée)' : '')
-        : ''
-      return `<path class="${cls}" d="${d}"${marker}>${titre ? `<title>${esc(titre)}</title>` : ''}</path>`
-    })
-    .join('')
-
-  // l'analyse est au-dessus de son agregat : cette fleche-la descend
-  const analysisSvg = analyses
-    .map((an) => {
-      const from = placed.get(an.key)
-      const to = placed.get(an.target)
-      if (!from || !to) return ''
-      const { d, maxX: mx } = linkPath(
-        from.x + from.w / 2, from.y + from.h,
-        to.x + to.w / 2, to.y - 7,
-        from.row, to.row, rowBounds,
-      )
-      maxX = Math.max(maxX, mx)
-      const manque = analysisIssue(an.levels, an.target, dims)
-      const titre = manque.length
-        ? `${an.label} : ${names.get(an.target) ?? '?'} est trop agrégé sur ${manque.join(', ')}`
-        : `${an.label} est servie par ${names.get(an.target) ?? '?'}`
-      return `<path class="edge analysis${manque.length ? ' invalide' : ''}" d="${d}" ` +
-        `marker-end="url(#${manque.length ? 'arrow-invalide' : 'arrow-analyse'})">` +
-        `<title>${esc(titre)}</title></path>`
-    })
-    .join('')
-
-  // Fleches libres : aucune semantique de treillis, elles relient ce que
-  // l'utilisateur veut. Violet, pour ne se confondre ni avec les derivations
-  // (bleu) ni avec les rattachements d'analyse (sombre).
-  let minY = 0
-  const freeSvg = state.freeArrows
-    .map((f) => {
-      const a = placed.get(f.from)
-      const b = placed.get(f.to)
-      if (!a || !b || f.from === f.to) return ''
-      const xa = a.x + a.w / 2
-      const xb = b.x + b.w / 2
-      let d
-      let etiq
-
-      if (a.row === b.row) {
-        // meme rangee : passer par le dessus. Tout droit, le trait traverserait
-        // les boites voisines et leurs etiquettes.
-        const arc = 34
-        d = `M${xa},${a.y} C${xa},${a.y - arc} ${xb},${b.y - arc} ${xb},${b.y - 7}`
-        minY = Math.min(minY, a.y - arc)
-        etiq = { x: (xa + xb) / 2, y: a.y - arc + 6, milieu: true }
-      } else {
-        const monte = a.y > b.y
-        const r = linkPath(
-          xa, monte ? a.y : a.y + a.h,
-          xb, monte ? b.y + b.h + 7 : b.y - 7,
-          a.row, b.row, rowBounds, NODE_H,
-        )
-        d = r.d
-        maxX = Math.max(maxX, r.maxX)
-        etiq = { x: (xa + xb) / 2 + 8, y: (a.y + b.y) / 2 + NODE_H / 2, milieu: false }
-      }
-
-      const texte = f.label
-        ? `<text class="tag libre${etiq.milieu ? ' centre' : ''}" x="${etiq.x}" y="${etiq.y}">${esc(f.label)}</text>`
-        : ''
-      return `<path class="edge libre" d="${d}" marker-end="url(#arrow-libre)">` +
-        `<title>${esc(f.label || 'flèche libre')}</title></path>${texte}`
-    })
-    .join('')
-
-  const canvasWidth = Math.max(width, maxX + MARGIN)
-  // un arc au-dessus de la rangee du haut sort du cadre : on remonte l'origine
-  // du viewBox plutot que de deplacer tout le contenu
-  const top = Math.min(0, minY - 6)
-  const canvasHeight = height - top
-
-  const boxSvg = [...placed.values()]
-    .map((n) => {
-      const isAnalysis = n.key.startsWith('A:')
-      const isBase = n.key === base
-      const cls = ['node', isAnalysis ? 'analysis' : '', isBase ? 'base' : '', mats.has(n.key) ? 'mat' : '']
-        .join(' ')
-        .trim()
-      const tag = isAnalysis ? n.tag : tagOf(n.key)
-      const tagSvg = tag
-        ? `<text class="tag" x="${n.x + n.w + 8}" y="${n.y + n.h / 2 + 1}">${esc(tag)}</text>`
-        : ''
-      const title = isAnalysis
-        ? `Analyse servie par ${names.get(n.target) ?? '?'}`
-        : isBase
-          ? 'Données détaillées : toujours matérialisé'
-          : mats.has(n.key)
-            ? 'Cliquer pour retirer du treillis partiel'
-            : 'Cliquer pour matérialiser'
-      const clickable = !isAnalysis && !isBase
-      return `<g class="${cls}" data-key="${esc(n.key)}"${clickable ? ' cursor="pointer"' : ''}>
-        <title>${esc(title)}</title>
-        ${tagSvg}
-        <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/>
-        <text x="${n.x + n.w / 2}" y="${n.y + n.h / 2 + 1}">${esc(n.label)}</text>
-      </g>`
-    })
-    .join('')
-
-  host.innerHTML = `<svg id="svg" xmlns="http://www.w3.org/2000/svg"
-      width="${canvasWidth}" height="${canvasHeight}" viewBox="0 ${top} ${canvasWidth} ${canvasHeight}">
-    <style>${SVG_STYLE}</style>
-    <defs>
-      <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4"
-        markerWidth="7" markerHeight="7" orient="auto">
-        <path d="M0,0 L8,4 L0,8 z" fill="#2f6fd0"/>
-      </marker>
-      <marker id="arrow-analyse" viewBox="0 0 8 8" refX="7" refY="4"
-        markerWidth="7" markerHeight="7" orient="auto">
-        <path d="M0,0 L8,4 L0,8 z" fill="#334155"/>
-      </marker>
-      <marker id="arrow-libre" viewBox="0 0 8 8" refX="7" refY="4"
-        markerWidth="7" markerHeight="7" orient="auto">
-        <path d="M0,0 L8,4 L0,8 z" fill="#7c3aed"/>
-      </marker>
-      <marker id="arrow-invalide" viewBox="0 0 8 8" refX="7" refY="4"
-        markerWidth="7" markerHeight="7" orient="auto">
-        <path d="M0,0 L8,4 L0,8 z" fill="#b91c1c"/>
-      </marker>
-    </defs>
-    <rect data-export="background" x="0" y="${top}" width="${canvasWidth}" height="${canvasHeight}" fill="#ffffff"/>
-    <g data-export="content">${edgeSvg}${analysisSvg}${freeSvg}${boxSvg}</g>
-  </svg>`
+  host.innerHTML = diagramSvg({
+    items,
+    analyses,
+    edges,
+    freeArrows: state.freeArrows,
+    names,
+    base,
+    materialized: mats,
+  })
 
   const total = lattice.nodes.length
   $('#count').textContent = partial
@@ -1041,23 +816,11 @@ $('#mode-partial').onclick = () => setMode('partial')
 /* Import / export JSON                                                */
 /* ------------------------------------------------------------------ */
 
-function download(blob, filename) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
+/** nom de fichier tire du fait : tout ce qui n'est pas sur dans un nom de
+ *  fichier devient un souligne */
 const slug = () => (state.factName || 'treillis').replace(/[^\w.-]+/g, '_') || 'treillis'
 
-$('#btn-export').onclick = () => {
-  download(
-    new Blob([JSON.stringify(toOwnFormat(state), null, 2)], { type: 'application/json' }),
-    `${slug()}-treillis.json`,
-  )
-}
+$('#btn-export').onclick = () => downloadJson(toOwnFormat(state), `${slug()}-treillis.json`)
 
 $('#btn-import').onclick = () => $('#file').click()
 
@@ -1081,79 +844,8 @@ $('#file').addEventListener('change', async (e) => {
 /* Export image                                                        */
 /* ------------------------------------------------------------------ */
 
-/** Copie du diagramme dimensionnee en px, recadree sur son contenu reel.
- *  Un seul getBBox sur le groupe sans transform suffit : il unit deja ses
- *  enfants dans l'espace de la racine. Le fond reste hors du groupe pour ne
- *  pas gonfler la boite. */
-function exportClone(svg, border = 16) {
-  const box = svg.querySelector('[data-export="content"]').getBBox()
-  const x = box.x - border
-  const y = box.y - border
-  const width = box.width + border * 2
-  const height = box.height + border * 2
-
-  const clone = svg.cloneNode(true)
-  clone.removeAttribute('id')
-  clone.setAttribute('viewBox', `${x} ${y} ${width} ${height}`)
-  clone.setAttribute('width', String(width))
-  clone.setAttribute('height', String(height))
-  const bg = clone.querySelector('[data-export="background"]')
-  bg.setAttribute('x', String(x))
-  bg.setAttribute('y', String(y))
-  bg.setAttribute('width', String(width))
-  bg.setAttribute('height', String(height))
-  return { clone, width, height }
-}
-
-async function exportImage(format) {
-  const svg = $('#svg')
-  if (!svg) {
-    alert('Rien à exporter : le treillis n’est pas affiché.')
-    return
-  }
-
-  const { clone, width, height } = exportClone(svg)
-  const text = new XMLSerializer().serializeToString(clone)
-
-  if (format === 'svg') {
-    download(new Blob([text], { type: 'image/svg+xml;charset=utf-8' }), `${slug()}-treillis.svg`)
-    return
-  }
-
-  const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml;charset=utf-8' }))
-  const canvas = document.createElement('canvas')
-  const scale = 2 // raster x2 : le texte reste net a l'impression
-  try {
-    const img = new Image()
-    await new Promise((resolve, reject) => {
-      img.onload = resolve
-      img.onerror = () => reject(new Error('échec du rendu SVG'))
-      img.src = url
-    })
-    canvas.width = width * scale
-    canvas.height = height * scale
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('canvas 2D indisponible')
-    ctx.scale(scale, scale)
-    // le JPEG n'a pas de canal alpha : on peint le fond sur le canvas plutot
-    // que de compter sur la transparence
-    if (format === 'jpeg') {
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, width, height)
-    }
-    ctx.drawImage(img, 0, 0, width, height)
-  } finally {
-    URL.revokeObjectURL(url)
-  }
-
-  const blob = await new Promise((res) =>
-    canvas.toBlob(res, format === 'png' ? 'image/png' : 'image/jpeg', 0.95),
-  )
-  if (!blob) throw new Error('échec de génération de l’image')
-  download(blob, `${slug()}-treillis.${format === 'jpeg' ? 'jpg' : 'png'}`)
-}
-
-$('#btn-image').onclick = () => exportImage($('#fmt').value).catch((err) => alert(err.message))
+$('#btn-image').onclick = () =>
+  exportImage($('#svg'), $('#fmt').value, `${slug()}-treillis`).catch((err) => alert(err.message))
 
 render()
 </script>

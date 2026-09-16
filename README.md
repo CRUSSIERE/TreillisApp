@@ -4,7 +4,7 @@ Application web 100 % client pour construire les **treillis d'agrégats** du
 cours de modélisation multidimensionnelle de F. Ravat : le **treillis complet**
 de tous les agrégats possibles (p.34), et le **treillis partiel** des vues
 réellement matérialisées (p.35, p.61-62). Aucun backend, aucun compte, aucune
-dépendance : trois fichiers statiques.
+dépendance : des fichiers statiques.
 
 **Essayer en ligne :** https://crussiere.github.io/TreillisApp/
 
@@ -297,6 +297,21 @@ transparence. L'image est recadrée sur le contenu réel, avec une marge de
 l'app. Seules des polices système sont utilisées — une webfont disparaîtrait
 à la rastérisation.
 
+## Organisation du code
+
+| Fichier | Rôle | Pur ? |
+|---|---|---|
+| `lattice.js` | Sémantique OLAP : treillis, dérivations, analyses, SQL, format JSON | oui |
+| `render.js` | Géométrie et dessin : disposition, tracé des liens, génération du SVG | oui |
+| `files.js` | Sorties : téléchargement JSON, export image | non (Blob, canvas) |
+| `index.html` | État, panneau de saisie, événements | non (DOM) |
+
+Les deux modules purs ne connaissent ni le DOM ni l'état de l'app : `render.js`
+reçoit un modèle **déjà résolu** — qui dérive de quoi, quelle analyse est
+servie par qui — et se contente de placer et de dessiner. C'est ce qui permet à
+`verify.mjs` de contrôler le dessin comme il contrôle le treillis, échappement
+des libellés compris.
+
 ## Développement
 
 Les modules ES imposent un vrai serveur, `file://` ne suffit pas :
@@ -313,12 +328,12 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-46 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+51 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
 SQL de la p.62, la décomposition des moyennes, l'échappement des identifiants,
 les attributs faibles, l'élagage de la sélection, le tracé des liens qui
-enjambent une rangée, le round-trip JSON, et la conversion depuis le format
-d'appmodelisationolap.
+enjambent une rangée, la génération du SVG, le round-trip JSON, et la
+conversion depuis le format d'appmodelisationolap.
 
 ## Déploiement sur GitHub Pages
 
