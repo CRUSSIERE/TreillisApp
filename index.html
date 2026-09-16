@@ -125,7 +125,7 @@
 import {
   AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
   derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, keyOf, latticeSize,
-  parseKey, sortKeys, toOwnFormat, toSql,
+  labelOf, parseKey, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
 } from './lattice.js'
 
 /* ------------------------------------------------------------------ */
@@ -144,6 +144,8 @@ const EXEMPLE_COURS = () => ({
     { name: 'TEMPS', levels: ['codeT', 'num_mois', 'annee'], hierarchies: [] },
   ],
   materialized: [],
+  sources: {}, // cle d'agregat -> cle de sa source imposee ; absent = automatique
+  analyses: [],
   mode: 'complete',
 })
 
@@ -163,7 +165,7 @@ const axes = () => state.dimensions.filter((d) => d.levels.length > 0)
 /** Les cles de noeuds encodent des indices de niveau : une dimension retiree
  *  ou raccourcie les rend caduques. On elague plutot que de tout effacer --
  *  ajouter un niveau en fin de hierarchie ne perd aucune selection. */
-function pruneMaterialized() {
+function pruneSelection() {
   const dims = axes()
   const sizes = dims.map((d) => d.levels.length + 1)
   const base = baseKey(dims)
@@ -181,6 +183,26 @@ function pruneMaterialized() {
       }),
     ),
   )
+
+  // une source qui n'est plus materialisee, ou devenue trop grossiere apres
+  // un remaniement des niveaux, redevient automatique plutot que de pointer
+  // dans le vide
+  const valides = new Set([...state.materialized, base])
+  state.sources = Object.fromEntries(
+    Object.entries(state.sources ?? {}).filter(
+      ([to, from]) =>
+        valides.has(to) && valides.has(from) && validSources(to, state.materialized, dims).includes(from),
+    ),
+  )
+
+  // meme logique pour les analyses : un niveau par dimension, dans les bornes
+  state.analyses = (state.analyses ?? []).map((a) => ({
+    ...a,
+    levels: dims.map((d, i) => {
+      const v = a.levels?.[i]
+      return Number.isInteger(v) && v >= 0 && v <= d.levels.length ? v : 0
+    }),
+  }))
 }
 
 /* ------------------------------------------------------------------ */
@@ -260,7 +282,68 @@ function renderPanel() {
 
     <h2>Agrégats à matérialiser</h2>
     ${renderAggregates()}
+
+    <h2>Analyses</h2>
+    ${renderAnalyses()}
   `
+}
+
+/** Les requetes frequentes de la p.35. Une analyse ne se rattache pas a la
+ *  main : l'app cherche l'agregat le plus grossier qui reste assez fin pour y
+ *  repondre, ce qui montre du meme coup celles que rien n'accelere. */
+function renderAnalyses() {
+  const dims = axes()
+  if (dims.length === 0) return '<p class="hint">Définis d’abord une dimension.</p>'
+
+  const mats = [...state.materialized, baseKey(dims)]
+  const names = aggregateNames(state.materialized, dims, state.factName)
+
+  const rows = state.analyses
+    .map((a, i) => {
+      const selects = dims
+        .map(
+          (d, di) => `<div class="row">
+            <span class="dlabel">${esc(d.name)}</span>
+            <select data-field="ana-level" data-i="${i}" data-d="${di}">
+              ${[...d.levels, ALL]
+                .map(
+                  (lv, li) =>
+                    `<option value="${li}"${li === a.levels[di] ? ' selected' : ''}>${esc(lv)}</option>`,
+                )
+                .join('')}
+            </select>
+          </div>`,
+        )
+        .join('')
+      const servi = names.get(analysisSource(a.levels, mats, dims)) ?? '?'
+      return `<div class="dim">
+        <div class="row">
+          <input type="text" class="grow" data-field="ana-name" data-i="${i}" value="${esc(a.name)}">
+          <button class="icon" data-act="del-ana" data-i="${i}" title="Supprimer l’analyse">&times;</button>
+        </div>
+        <div class="row">
+          <span class="dlabel">mesure</span>
+          <select data-field="ana-measure" data-i="${i}">
+            ${state.measures
+              .map(
+                (m) =>
+                  `<option${m.name === a.measure ? ' selected' : ''}>${esc(m.name)}</option>`,
+              )
+              .join('')}
+          </select>
+        </div>
+        ${selects}
+        <p class="hint">servie par <strong>${esc(servi)}</strong></p>
+      </div>`
+    })
+    .join('')
+
+  return `
+    <p class="hint">Les requêtes fréquentes. L’app relie chacune à l’agrégat
+      qui peut y répondre ; retomber sur ${esc(state.factName)} signifie
+      qu’aucun agrégat ne l’accélère.</p>
+    ${rows}
+    <button class="add" data-act="add-ana">+ analyse</button>`
 }
 
 /** Construction explicite du treillis partiel : un agregat = un niveau par
@@ -291,12 +374,28 @@ function renderAggregates() {
           </div>`,
         )
         .join('')
+      const auto = derivations(state.materialized, dims, {}).find((l) => l.to === key)?.from
+      const choix = validSources(key, state.materialized, dims)
+        .map(
+          (k) =>
+            `<option value="${esc(k)}"${state.sources[key] === k ? ' selected' : ''}>${esc(names.get(k) ?? k)}</option>`,
+        )
+        .join('')
+      const source = `<div class="row">
+        <span class="dlabel">calculé depuis</span>
+        <select data-field="agg-source" data-k="${esc(key)}">
+          <option value=""${state.sources[key] ? '' : ' selected'}>auto — ${esc(names.get(auto) ?? '')}</option>
+          ${choix}
+        </select>
+      </div>`
+
       return `<div class="dim">
         <div class="row">
           <strong class="grow">${esc(names.get(key) ?? '')}</strong>
           <button class="icon" data-act="del-agg" data-i="${i}" title="Retirer cet agrégat">&times;</button>
         </div>
         ${selects}
+        ${source}
       </div>`
     })
     .join('')
@@ -331,6 +430,10 @@ const SVG_STYLE = `
   }
   .node.mat rect { fill: #e8f0fc; stroke: #2f6fd0; stroke-width: 1.8; }
   .node.base rect { fill: #fdf1e2; stroke: #b45309; stroke-width: 1.8; }
+  .node.analysis rect { fill: #effaf1; stroke: #15803d; stroke-width: 1.8; }
+  .edge.analysis { stroke: #334155; stroke-width: 1.6; }
+  /* pointilles = source choisie a la main, trait plein = calcul automatique */
+  .edge.forced { stroke-dasharray: 5 3; }
   /* a cote de la boite, pas au-dessus : la pointe de fleche y arrive.
      Selecteur plus specifique que "node text", sinon l'etiquette reste
      centree sur son ancre et la boite en recouvre la moitie gauche. */
@@ -343,24 +446,28 @@ const SVG_STYLE = `
 const nodeWidth = (label) => Math.max(92, label.length * 7 + 26)
 
 /**
- * Disposition en couches par rang : rang 0 (donnees detaillees) en haut,
- * l'agregation descend -- l'orientation des planches p.34 et p.35.
+ * Disposition en couches par rang : rang 0 (donnees detaillees) EN BAS,
+ * l'agregation monte, et les analyses forment la bande du dessus --
+ * l'orientation de la planche p.35.
  * ponytail: ordre lexicographique dans chaque couche, sans reduction de
  * croisements ; passer a un tri barycentrique si les aretes deviennent
  * illisibles au-dela de 3 dimensions.
  */
-function layout(nodes, gutter = 0) {
+function layout(nodes, analyses, gutter = 0) {
   const ranks = [...new Set(nodes.map((n) => n.rank))].sort((a, b) => a - b)
   const rows = ranks.map((r) => nodes.filter((n) => n.rank === r))
+  if (analyses.length) rows.push(analyses)
+
   const widths = rows.map((row) => row.reduce((w, n) => w + nodeWidth(n.label) + GAP_X, -GAP_X))
   // gouttiere symetrique : les rangees restent centrees, et l'etiquette posee
   // a droite d'une boite du bord a la place de s'afficher
   const width = Math.max(...widths, 200) + MARGIN * 2 + gutter * 2
+  const step = NODE_H + GAP_Y
 
   const placed = new Map()
   rows.forEach((row, r) => {
     let x = (width - widths[r]) / 2
-    const y = MARGIN + r * (NODE_H + GAP_Y)
+    const y = MARGIN + (rows.length - 1 - r) * step // r = 0 tout en bas
     for (const n of row) {
       const w = nodeWidth(n.label)
       placed.set(n.key, { ...n, x, y, w, h: NODE_H })
@@ -368,7 +475,7 @@ function layout(nodes, gutter = 0) {
     }
   })
 
-  return { placed, width, height: MARGIN * 2 + rows.length * (NODE_H + GAP_Y) - GAP_Y }
+  return { placed, width, height: MARGIN * 2 + rows.length * step - GAP_Y }
 }
 
 function renderCanvas() {
@@ -397,43 +504,78 @@ function renderCanvas() {
   const partial = state.mode === 'partial'
 
   const nodes = partial ? lattice.nodes.filter((n) => mats.has(n.key)) : lattice.nodes
-  const names = partial ? aggregateNames([...mats], dims, state.factName) : null
+  const names = aggregateNames([...mats], dims, state.factName)
 
-  // etiquette posee a droite de chaque boite (VENTES, Agg1...) : la plus
-  // longue fixe la gouttiere, sinon elle deborde du canvas
+  // etiquette posee a droite de chaque boite (VENTES, Agg1...)
   const tagOf = (key) => (partial ? names.get(key) ?? '' : key === base ? state.factName : '')
-  const tagRoom = Math.max(0, ...nodes.map((n) => tagOf(n.key).length)) * 6.2
-  const { placed, width, height } = layout(nodes, tagRoom ? tagRoom + 16 : 0)
+
+  // Analyses : une bande au-dessus du treillis, chacune reliee a l'agregat qui
+  // peut y repondre (p.35). La cle prefixee `A:` les distingue des noeuds, qui
+  // sont eux des tuples de chiffres -- aucune collision possible.
+  const analyses = state.analyses.map((a, i) => {
+    const measure = state.measures.find((m) => m.name === a.measure)
+    return {
+      key: `A:${i}`,
+      rank: 0,
+      label: a.name,
+      tag: `${measure ? `${measure.agg}(${measure.name}) · ` : ''}${labelOf(a.levels, dims)}`,
+      target: analysisSource(a.levels, [...mats], dims),
+    }
+  })
+
+  // la plus longue etiquette fixe la gouttiere, sinon elle deborde du canvas
+  const tagRoom =
+    Math.max(0, ...nodes.map((n) => tagOf(n.key).length), ...analyses.map((a) => a.tag.length)) * 6.2
+  const { placed, width, height } = layout(nodes, analyses, tagRoom ? tagRoom + 16 : 0)
 
   const edges = partial
-    ? derivations([...mats], dims).map((e) => ({ ...e, deriv: true }))
+    ? derivations([...mats], dims, state.sources).map((e) => ({ ...e, deriv: true }))
     : lattice.edges
 
+  // `from` est toujours le noeud le plus fin, donc le plus bas : la fleche monte
   const edgeSvg = edges
-    .map(({ from, to, deriv }) => {
+    .map(({ from, to, deriv, forced }) => {
       const a = placed.get(from)
       const b = placed.get(to)
       if (!a || !b) return ''
+      const cls = `edge${deriv ? ' deriv' : ''}${forced ? ' forced' : ''}`
       const marker = deriv ? ' marker-end="url(#arrow)"' : ''
-      return `<line class="edge${deriv ? ' deriv' : ''}" x1="${a.x + a.w / 2}" y1="${a.y + a.h}" ` +
-        `x2="${b.x + b.w / 2}" y2="${b.y - (deriv ? 7 : 0)}"${marker}/>`
+      return `<line class="${cls}" x1="${a.x + a.w / 2}" y1="${a.y}" ` +
+        `x2="${b.x + b.w / 2}" y2="${b.y + b.h + (deriv ? 7 : 0)}"${marker}/>`
     })
     .join('')
 
-  const nodeSvg = [...placed.values()]
+  // l'analyse est au-dessus de son agregat : cette fleche-la descend
+  const analysisSvg = analyses
+    .map((a) => {
+      const from = placed.get(a.key)
+      const to = placed.get(a.target)
+      if (!from || !to) return ''
+      return `<line class="edge analysis" x1="${from.x + from.w / 2}" y1="${from.y + from.h}" ` +
+        `x2="${to.x + to.w / 2}" y2="${to.y - 7}" marker-end="url(#arrow-analyse)"/>`
+    })
+    .join('')
+
+  const boxSvg = [...placed.values()]
     .map((n) => {
+      const isAnalysis = n.key.startsWith('A:')
       const isBase = n.key === base
-      const cls = ['node', isBase ? 'base' : '', mats.has(n.key) ? 'mat' : ''].join(' ').trim()
-      const tag = tagOf(n.key)
+      const cls = ['node', isAnalysis ? 'analysis' : '', isBase ? 'base' : '', mats.has(n.key) ? 'mat' : '']
+        .join(' ')
+        .trim()
+      const tag = isAnalysis ? n.tag : tagOf(n.key)
       const tagSvg = tag
         ? `<text class="tag" x="${n.x + n.w + 8}" y="${n.y + n.h / 2 + 1}">${esc(tag)}</text>`
         : ''
-      const title = isBase
-        ? 'Données détaillées : toujours matérialisé'
-        : mats.has(n.key)
-          ? 'Cliquer pour retirer du treillis partiel'
-          : 'Cliquer pour matérialiser'
-      return `<g class="${cls}" data-key="${esc(n.key)}"${isBase ? '' : ' cursor="pointer"'}>
+      const title = isAnalysis
+        ? `Analyse servie par ${names.get(n.target) ?? '?'}`
+        : isBase
+          ? 'Données détaillées : toujours matérialisé'
+          : mats.has(n.key)
+            ? 'Cliquer pour retirer du treillis partiel'
+            : 'Cliquer pour matérialiser'
+      const clickable = !isAnalysis && !isBase
+      return `<g class="${cls}" data-key="${esc(n.key)}"${clickable ? ' cursor="pointer"' : ''}>
         <title>${esc(title)}</title>
         ${tagSvg}
         <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/>
@@ -450,9 +592,13 @@ function renderCanvas() {
         markerWidth="7" markerHeight="7" orient="auto">
         <path d="M0,0 L8,4 L0,8 z" fill="#2f6fd0"/>
       </marker>
+      <marker id="arrow-analyse" viewBox="0 0 8 8" refX="7" refY="4"
+        markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" fill="#334155"/>
+      </marker>
     </defs>
     <rect data-export="background" x="0" y="0" width="${width}" height="${height}" fill="#ffffff"/>
-    <g data-export="content">${edgeSvg}${nodeSvg}</g>
+    <g data-export="content">${edgeSvg}${analysisSvg}${boxSvg}</g>
   </svg>`
 
   const total = lattice.nodes.length
@@ -461,11 +607,13 @@ function renderCanvas() {
     : `${total} nœuds — clique pour matérialiser`
 
   $('#sql').hidden = !partial
-  if (partial) $('#sql-text').textContent = toSql(dims, state.measures, [...mats], state.factName)
+  if (partial) {
+    $('#sql-text').textContent = toSql(dims, state.measures, [...mats], state.factName, state.sources)
+  }
 }
 
 function render() {
-  pruneMaterialized()
+  pruneSelection()
   renderPanel()
   renderCanvas()
 }
@@ -529,6 +677,16 @@ $('#panel').addEventListener('click', (e) => {
     case 'del-agg':
       state.materialized.splice(Number(btn.dataset.i), 1)
       break
+    case 'add-ana':
+      state.analyses.push({
+        name: `A${state.analyses.length + 1}`,
+        levels: axes().map(() => 0),
+        measure: state.measures[0]?.name ?? '',
+      })
+      break
+    case 'del-ana':
+      state.analyses.splice(Number(btn.dataset.i), 1)
+      break
     default:
       return
   }
@@ -545,6 +703,7 @@ $('#panel').addEventListener('input', (e) => {
     case 'dim-name': state.dimensions[d].name = el.value; break
     case 'level': state.dimensions[d].levels[Number(el.dataset.l)] = el.value; break
     case 'measure-name': state.measures[Number(el.dataset.m)].name = el.value; break
+    case 'ana-name': state.analyses[Number(el.dataset.i)].name = el.value; break
     default: return
   }
   renderCanvas()
@@ -563,6 +722,17 @@ $('#panel').addEventListener('change', (e) => {
     // pruneMaterialized dedoublonne, la ligne en trop disparait
     state.materialized[i] = keyOf(node)
     render()
+  } else if (el.dataset.field === 'agg-source') {
+    // valeur vide = on rend la main au calcul automatique
+    if (el.value) state.sources[el.dataset.k] = el.value
+    else delete state.sources[el.dataset.k]
+    render()
+  } else if (el.dataset.field === 'ana-level') {
+    state.analyses[Number(el.dataset.i)].levels[Number(el.dataset.d)] = Number(el.value)
+    render()
+  } else if (el.dataset.field === 'ana-measure') {
+    state.analyses[Number(el.dataset.i)].measure = el.value
+    render()
   } else if (el.dataset.field === 'hier') {
     const dim = state.dimensions[Number(el.dataset.d)]
     const chosen = dim.hierarchies.find((h) => h.name === el.value)
@@ -578,6 +748,7 @@ $('#canvas').addEventListener('click', (e) => {
   const g = e.target.closest('[data-key]')
   if (!g) return
   const key = g.dataset.key
+  if (key.startsWith('A:')) return // une analyse n'est pas un noeud du treillis
   if (key === baseKey(axes())) return // la table de faits n'est pas optionnelle
 
   const i = state.materialized.indexOf(key)

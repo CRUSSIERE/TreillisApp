@@ -106,11 +106,21 @@ export const sortKeys = (keys) => [...keys].sort(byRankThenKey)
  * c'est ce qui donne Agg2 <- Agg1 <- VENTES plutot que Agg2 <- VENTES.
  * Le noeud de base est toujours materialise : c'est la table de faits.
  */
-export function derivations(materializedKeys, dimensions) {
+export function derivations(materializedKeys, dimensions, sources = {}) {
   const keys = [...new Set([...materializedKeys, baseKey(dimensions)])].sort(byRankThenKey)
+  const present = new Set(keys)
   const links = []
   for (const to of keys) {
     const target = parseKey(to)
+
+    // source imposee a la main. Elle doit rester plus fine que sa cible : cet
+    // ordre etant strict, un cycle est impossible -- inutile de le verifier.
+    const forced = sources[to]
+    if (forced && forced !== to && present.has(forced) && canDerive(parseKey(forced), target)) {
+      links.push({ from: forced, to, forced: true })
+      continue
+    }
+
     let best = null
     let bestRank = -1
     for (const from of keys) {
@@ -125,9 +135,43 @@ export function derivations(materializedKeys, dimensions) {
         bestRank = rank
       }
     }
-    if (best !== null) links.push({ from: best, to })
+    if (best !== null) links.push({ from: best, to, forced: false })
   }
   return links
+}
+
+/** Sources admissibles pour un agregat : les noeuds materialises strictement
+ *  plus fins que lui, table de faits comprise. Rien d'autre ne peut le
+ *  produire par agregation. */
+export function validSources(key, materializedKeys, dimensions) {
+  const target = parseKey(key)
+  return sortKeys(
+    [...new Set([...materializedKeys, baseKey(dimensions)])].filter(
+      (k) => k !== key && canDerive(parseKey(k), target),
+    ),
+  )
+}
+
+/**
+ * Agregat qui repond a une analyse (p.35 : les fleches A1 -> Agg1, A2 -> Agg2).
+ * Une analyse groupant au niveau L se sert de n'importe quel agregat plus fin
+ * ou egal ; le meilleur est le plus grossier d'entre eux, celui qui laisse le
+ * moins de lignes a parcourir. La table de faits convient toujours -- y
+ * atterrir signifie simplement que l'analyse n'est acceleree par rien.
+ */
+export function analysisSource(levels, materializedKeys, dimensions) {
+  let best = null
+  let bestRank = -1
+  for (const key of new Set([...materializedKeys, baseKey(dimensions)])) {
+    const node = parseKey(key)
+    if (!canDerive(node, levels)) continue
+    const rank = rankOf(node)
+    if (rank > bestRank || (rank === bestRank && key < best)) {
+      best = key
+      bestRank = rank
+    }
+  }
+  return best
 }
 
 /** Agg1, Agg2... dans l'ordre topologique ; la base garde le nom du fait. */
@@ -157,11 +201,11 @@ function reaggregate(agg, fromDetail) {
 }
 
 /** Vues materialisees Oracle correspondant au treillis partiel (p.62). */
-export function toSql(dimensions, measures, materializedKeys, factName = 'FAITS') {
+export function toSql(dimensions, measures, materializedKeys, factName = 'FAITS', sources = {}) {
   const base = baseKey(dimensions)
   const mats = [...new Set([...materializedKeys, base])]
   const names = aggregateNames(mats, dimensions, factName)
-  const sourceOf = new Map(derivations(mats, dimensions).map((l) => [l.to, l.from]))
+  const sourceOf = new Map(derivations(mats, dimensions, sources).map((l) => [l.to, l.from]))
   const aggs = mats.filter((k) => k !== base).sort(byRankThenKey)
 
   if (aggs.length === 0) return '-- Aucun agregat selectionne : coche des noeuds du treillis.'
@@ -210,6 +254,10 @@ export function toOwnFormat(state) {
       ...(d.hierarchies?.length ? { hierarchies: d.hierarchies } : {}),
     })),
     materialized: state.materialized,
+    // omis quand vides : un fichier sans source forcee ni analyse garde la
+    // forme qu'il avait avant que ces deux champs existent
+    ...(Object.keys(state.sources ?? {}).length ? { sources: state.sources } : {}),
+    ...(state.analyses?.length ? { analyses: state.analyses } : {}),
     mode: state.mode,
   }
 }
@@ -241,6 +289,25 @@ export function fromOwnFormat(json) {
     return { name: m.name, agg: AGGREGATIONS.includes(m.agg) ? m.agg : 'SUM' }
   })
 
+  const sources = {}
+  if (json.sources && typeof json.sources === 'object' && !Array.isArray(json.sources)) {
+    for (const [to, from] of Object.entries(json.sources)) {
+      if (typeof from === 'string') sources[to] = from
+    }
+  }
+
+  const analyses = (Array.isArray(json.analyses) ? json.analyses : []).map((a, i) => {
+    if (!a || typeof a.name !== 'string') fail(`analyses[${i}].name manquant`)
+    if (!Array.isArray(a.levels) || !a.levels.every((v) => Number.isInteger(v))) {
+      fail(`analyses[${i}].levels doit etre un tableau d’entiers`)
+    }
+    return {
+      name: a.name,
+      levels: [...a.levels],
+      measure: typeof a.measure === 'string' ? a.measure : (measures[0]?.name ?? ''),
+    }
+  })
+
   return {
     factName: typeof json.factName === 'string' ? json.factName : 'FAITS',
     measures,
@@ -248,6 +315,8 @@ export function fromOwnFormat(json) {
     materialized: (Array.isArray(json.materialized) ? json.materialized : []).filter(
       (k) => typeof k === 'string',
     ),
+    sources,
+    analyses,
     mode: json.mode === 'partial' ? 'partial' : 'complete',
   }
 }

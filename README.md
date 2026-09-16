@@ -20,6 +20,8 @@ dépendance : trois fichiers statiques.
   proche ancêtre matérialisé**, pas depuis les données détaillées. C'est ce
   qui donne la chaîne `VENTES → Agg1 → Agg2` de la p.35 plutôt que deux
   agrégats branchés en parallèle sur la table de faits.
+- **Analyses** — les requêtes fréquentes (A1, A2 de la planche). Chacune est
+  reliée automatiquement à l'agrégat capable d'y répondre.
 - **SQL des vues matérialisées** — le `CREATE MATERIALIZED VIEW` de chaque
   agrégat, avec la bonne source et le bon `GROUP BY` (p.62).
 - **Import / export JSON** et **export image** (SVG, PNG, JPG).
@@ -63,6 +65,40 @@ Deux règles pour éviter les impasses :
 - amener un agrégat sur un nœud déjà retenu **fusionne** les deux lignes, il
   n'y a jamais de doublon.
 
+### Sens de lecture
+
+Les **données détaillées sont en bas**, l'agrégation monte, et les analyses
+forment la bande du haut — l'orientation de la planche p.35. Les flèches
+bleues montent (un agrégat est calculé depuis ce qui est sous lui), les
+flèches sombres des analyses descendent vers l'agrégat qui les sert.
+
+### Choisir la source d'un agrégat
+
+Chaque agrégat porte une liste **« calculé depuis »**. Par défaut `auto` :
+l'app prend le plus proche ancêtre matérialisé. La liste ne propose que des
+sources réellement valides, c'est-à-dire les nœuds matérialisés **strictement
+plus fins** — rien d'autre ne peut produire l'agrégat par agrégation.
+
+Les deux cas du cours coexistent sans réglage :
+
+- **plusieurs agrégats sur la même source** — deux agrégats incomparables se
+  branchent chacun sur la table de faits ;
+- **un agrégat sur un autre agrégat** — c'est le `Agg2 ← Agg1` de la p.35.
+
+Forcer une source sert quand on veut s'écarter de ce choix, par exemple
+brancher `Agg2` directement sur la table de faits alors qu'`Agg1` existe. Le
+lien est alors tracé **en pointillés**, pour distinguer d'un coup d'œil ce qui
+est imposé de ce qui est calculé. Une source devenue invalide (supprimée, ou
+trop grossière après un remaniement des niveaux) redevient automatique.
+
+### Analyses
+
+*+ analyse* crée une requête : un nom, la mesure analysée, et un niveau par
+dimension. L'app lui rattache **le plus grossier des agrégats qui reste assez
+fin** pour y répondre — le moins de lignes à parcourir. Si une analyse retombe
+sur la table de faits, c'est qu'aucun agrégat ne l'accélère ; le panneau
+l'indique sous chaque analyse (« servie par … »).
+
 ### Re-agrégation des mesures
 
 Le SQL tient compte du fait qu'un agrégat calculé depuis un autre agrégat ne
@@ -81,11 +117,14 @@ planche « Détermination de certains nœuds du treillis des vues ».
 **Importer JSON** → basculer sur **Treillis partiel** :
 
 ```
-VENTES  = codeP, codeT, codeC      (table de faits, données détaillées)
-  |
-Agg1    = codeP, num_mois, codeC   analyse A1 : Sum(Qte) par Num_Mois, CodeP, CodeC
-  |
-Agg2    = All, annee, codeC        analyse A2 : Sum(Montant) par Annee, Nom
+        [ A1 ]                [ A2 ]           <- analyses
+           |                     |
+           v                     v
+                    All, annee, codeC     Agg2   ^
+                            ^                    |  l'agregation
+                    codeP, num_mois, codeC Agg1  |  monte
+                            ^                    |
+                    codeP, codeT, codeC   VENTES <- donnees detaillees
 ```
 
 À la main, cela revient à saisir trois dimensions de trois niveaux — PRODUITS
@@ -96,6 +135,13 @@ Agg2    = All, annee, codeC        analyse A2 : Sum(Montant) par Annee, Nom
 |---|---|---|---|
 | Agg1 | `codeP` | `num_mois` | `codeC` |
 | Agg2 | `All` | `annee` | `codeC` |
+
+puis les deux analyses de la bande du haut :
+
+| Analyse | Mesure | PRODUITS | TEMPS | CLIENTS | Servie par |
+|---|---|---|---|---|---|
+| A1 | `SUM(quantite)` | `codeP` | `num_mois` | `codeC` | Agg1 |
+| A2 | `SUM(montant)` | `All` | `annee` | `codeC` | Agg2 |
 
 Deux écarts d'affichage avec la planche, sans conséquence sur le treillis
 lui-même :
@@ -145,6 +191,12 @@ par **Importer JSON** (sélection des agrégats comprise) :
   "materialized": ["0,1"],  // un nœud = un indice de niveau par dimension,
                             // dans l'ordre de `dimensions`. L'indice
                             // `levels.length` désigne `All`.
+  "sources": {              // source imposée : agrégat -> son nœud source.
+    "0,1": "0,0"            // absent = calcul automatique. Facultatif.
+  },
+  "analyses": [             // facultatif
+    { "name": "A1", "levels": [0, 1], "measure": "quantite" }
+  ],
   "mode": "complete"        // complete | partial
 }
 ```
@@ -179,9 +231,10 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-19 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
-dérivation de la p.35, le SQL de la p.62, le round-trip JSON, et la
-conversion depuis le format d'appmodelisationolap.
+26 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+dérivation de la p.35, les sources forcées, le rattachement des analyses, le
+SQL de la p.62, le round-trip JSON, et la conversion depuis le format
+d'appmodelisationolap.
 
 ## Déploiement sur GitHub Pages
 

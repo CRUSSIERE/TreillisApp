@@ -11,5 +11,9 @@
     { "name": "CLIENTS", "levels": ["codeC", "ville", "pays"] }
   ],
   "materialized": ["0,1,0", "3,2,0"],
+  "analyses": [
+    { "name": "A1", "levels": [0, 1, 0], "measure": "quantite" },
+    { "name": "A2", "levels": [3, 2, 0], "measure": "montant" }
+  ],
   "mode": "partial"
 }

@@ -17,8 +17,10 @@ import {
   fromOwnFormat,
   labelOf,
   latticeSize,
+  analysisSource,
   parseKey,
   sortKeys,
+  validSources,
   toOwnFormat,
   toSql,
 } from './lattice.js'
@@ -105,13 +107,15 @@ check('p.35 -- les noeuds choisis portent bien les libelles de la planche', () =
 })
 
 check('p.35 -- Agg2 derive d’Agg1, pas de la table de faits', () => {
-  const parCible = (a, b) => a.to.localeCompare(b.to)
+  const liens = derivations([AGG1, AGG2], p35)
+    .map(({ from, to }) => ({ from, to }))
+    .sort((a, b) => a.to.localeCompare(b.to))
   assert.deepEqual(
-    derivations([AGG1, AGG2], p35).sort(parCible),
+    liens,
     [
       { from: BASE, to: AGG1 },
       { from: AGG1, to: AGG2 },
-    ].sort(parCible),
+    ].sort((a, b) => a.to.localeCompare(b.to)),
   )
 })
 
@@ -152,6 +156,61 @@ check('p.7 -- COUNT se re-agrege en SUM, AVG est signalee non additive', () => {
   assert.match(bloc1, /COUNT\(nb\)/, 'premiere passe : COUNT sur les donnees detaillees')
   assert.match(bloc2, /SUM\(nb\)/, 'seconde passe : le COUNT se cumule en SUM')
   assert.match(bloc2, /-- moy : AVG/, 'AVG doit porter un avertissement')
+})
+
+check('sources -- forcer Agg2 sur la table de faits court-circuite Agg1', () => {
+  const liens = derivations([AGG1, AGG2], p35, { [AGG2]: BASE })
+  const vers2 = liens.find((l) => l.to === AGG2)
+  assert.equal(vers2.from, BASE)
+  assert.equal(vers2.forced, true)
+  // Agg1 n'etant pas force, il garde son calcul automatique
+  assert.equal(liens.find((l) => l.to === AGG1).from, BASE)
+
+  const sql = toSql(p35, mesures, [AGG1, AGG2], 'VENTES', { [AGG2]: BASE })
+  assert.match(sql.split('\n\n')[1], /FROM VENTES/)
+})
+
+check('sources -- une source impossible est ignoree, pas appliquee', () => {
+  // Agg2 est plus grossier qu'Agg1 : il ne peut pas le produire
+  const liens = derivations([AGG1, AGG2], p35, { [AGG1]: AGG2 })
+  const vers1 = liens.find((l) => l.to === AGG1)
+  assert.equal(vers1.from, BASE, 'retombe sur le calcul automatique')
+  assert.equal(vers1.forced, false)
+})
+
+check('sources -- validSources ne propose que des noeuds plus fins', () => {
+  assert.deepEqual(validSources(AGG2, [AGG1, AGG2], p35), [BASE, AGG1])
+  assert.deepEqual(validSources(AGG1, [AGG1, AGG2], p35), [BASE], 'Agg2 est trop grossier')
+})
+
+check('sources -- deux agregats incomparables partagent la table de faits', () => {
+  const AUTRE = '0,0,1' // codeP, codeT, ville -- ni plus fin ni plus grossier qu'Agg1
+  const liens = derivations([AGG1, AUTRE], p35)
+  assert.deepEqual(
+    liens.filter((l) => l.to !== BASE).map((l) => l.from),
+    [BASE, BASE],
+  )
+})
+
+check('p.35 -- A1 et A2 se rattachent chacune a son agregat', () => {
+  // A1 : Sum(Qte) par Num_Mois, CodeP, CodeC  ->  Agg1
+  assert.equal(analysisSource(parseKey(AGG1), [AGG1, AGG2], p35), AGG1)
+  // A2 : Sum(Montant) par Annee, Nom (Nom = attribut faible de codeC)  ->  Agg2
+  assert.equal(analysisSource(parseKey(AGG2), [AGG1, AGG2], p35), AGG2)
+})
+
+check('analyses -- on prend l’agregat le plus grossier qui reste utilisable', () => {
+  const demande = parseKey('1,2,0') // sous_categ, annee, codeC
+  // Agg1 (codeP, num_mois, codeC) est plus fin : utilisable et plus grossier
+  // que la table de faits, donc prefere
+  assert.equal(analysisSource(demande, [AGG1], p35), AGG1)
+  // sans aucun agregat, il ne reste que les donnees detaillees
+  assert.equal(analysisSource(demande, [], p35), BASE)
+})
+
+check('analyses -- une analyse trop fine retombe sur les donnees detaillees', () => {
+  // Agg1 est deja agrege au mois : il ne peut pas repondre au jour
+  assert.equal(analysisSource(parseKey(BASE), [AGG1, AGG2], p35), BASE)
 })
 
 check('panneau -- sortKeys range les agregats comme aggregateNames les nomme', () => {
