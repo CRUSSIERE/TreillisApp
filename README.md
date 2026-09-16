@@ -6,7 +6,7 @@ de tous les agrégats possibles (p.34), et le **treillis partiel** des vues
 réellement matérialisées (p.35, p.61-62). Aucun backend, aucun compte, aucune
 dépendance : trois fichiers statiques.
 
-**Essayer en ligne :** *(à compléter après activation de GitHub Pages)*
+**Essayer en ligne :** https://crussiere.github.io/TreillisApp/
 
 ## Ce que fait l'app
 
