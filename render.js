@@ -48,6 +48,12 @@ const SVG_STYLE = `
   }
   text.tag.libre { font: 10.5px system-ui, sans-serif; fill: #7c3aed; text-anchor: start; }
   text.tag.libre.centre { text-anchor: middle; }
+  /* bandes de la planche p.35 : Analyses / Donnees agregees / Donnees detaillees */
+  .bande {
+    font: 600 11.5px system-ui, sans-serif; fill: #4a5da8;
+    text-anchor: start; dominant-baseline: middle;
+  }
+  .bande-ligne { stroke: #4a5da8; stroke-width: 1.2; stroke-dasharray: 9 6; }
 `
 
 const MARKERS = [
@@ -150,6 +156,61 @@ export function linkPath(x1, y1, x2, y2, rowA, rowB, rowBounds, boxHeight = NODE
 }
 
 const centre = (b) => b.x + b.w / 2
+const BANDES = ['Données détaillées', 'Données agrégées', 'Analyses']
+
+/**
+ * Les trois bandes de la planche p.35, separees par des traits pointilles.
+ *
+ * `rowBounds` est ordonne du bas vers le haut : la rangee 0 porte les donnees
+ * detaillees (rang 0, la table de faits), la derniere porte les analyses s'il
+ * y en a, et tout ce qui est entre les deux est agrege.
+ *
+ * Les libelles vivent a GAUCHE du contenu, hors du cadre : on renvoie la
+ * marge dont l'appelant doit reculer l'origine du viewBox, plutot que de
+ * decaler toutes les boites deja placees.
+ */
+function drawBands(rowBounds, aDesAnalyses) {
+  const hautes = rowBounds.length - (aDesAnalyses ? 1 : 0) // rangees de noeuds
+  // sans agregat ni analyse, il n'y a qu'une bande : rien a separer
+  if (rowBounds.length < 2 && !aDesAnalyses) return { svg: '', left: 0 }
+
+  const large = Math.max(...BANDES.map((b) => b.length)) * 6.3 + 18
+  const left = -large
+  const droite = Math.max(...rowBounds.map((r) => r.right))
+
+  /** milieu de l'espace vide entre deux rangees voisines */
+  const entre = (bas, haut) => (rowBounds[haut].y + NODE_H + rowBounds[bas].y) / 2
+
+  const traits = []
+  const libelles = []
+
+  // donnees detaillees : la rangee du bas, toujours presente
+  libelles.push([rowBounds[0].y + NODE_H / 2, BANDES[0]])
+
+  if (hautes > 1) {
+    traits.push(entre(0, 1))
+    // donnees agregees : centrees entre le trait du bas et celui du haut
+    const basAgg = entre(0, 1)
+    const hautAgg = aDesAnalyses ? entre(hautes - 1, hautes) : rowBounds[hautes - 1].y
+    libelles.push([(basAgg + hautAgg) / 2, BANDES[1]])
+  }
+
+  if (aDesAnalyses) {
+    const iAnalyses = rowBounds.length - 1
+    traits.push(entre(iAnalyses - 1, iAnalyses))
+    libelles.push([rowBounds[iAnalyses].y + NODE_H / 2, BANDES[2]])
+  }
+
+  const svg =
+    traits
+      .map((y) => `<line class="bande-ligne" x1="${left + 6}" y1="${y}" x2="${droite}" y2="${y}"/>`)
+      .join('') +
+    libelles
+      .map(([y, texte]) => `<text class="bande" x="${left + 6}" y="${y}">${esc(texte)}</text>`)
+      .join('')
+
+  return { svg, left }
+}
 const titre = (t) => (t ? `<title>${esc(t)}</title>` : '')
 
 /** Derivations et roll-up : `from` est toujours le noeud le plus fin, donc le
@@ -293,26 +354,28 @@ export function diagramSvg({ items, analyses, edges, freeArrows, names, base, ma
   const suivreX = (x) => { maxX = Math.max(maxX, x) }
   const suivreY = (y) => { minY = Math.min(minY, y) }
 
+  const bandes = drawBands(rowBounds, analyses.length > 0)
   const edgeSvg = drawEdges(edges, placed, rowBounds, nom, suivreX)
   const analysisSvg = drawAnalyses(analyses, placed, rowBounds, nom, suivreX)
   const freeSvg = drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY)
   const boxSvg = drawBoxes(placed, base, materialized, nom)
 
-  const w = Math.max(width, maxX + MARGIN)
-  // on remonte l'origine du viewBox plutot que de deplacer tout le contenu
+  // on deplace l'origine du viewBox plutot que de deplacer tout le contenu
+  const left = bandes.left
   const top = Math.min(0, minY - 6)
+  const w = Math.max(width, maxX + MARGIN) - left
   const h = height - top
 
   // role="group" et non "img" : "img" rendrait tout le contenu presentationnel
   // et masquerait les boites focalisables aux lecteurs d'ecran
   return `<svg id="svg" xmlns="http://www.w3.org/2000/svg"
       role="group" aria-label="${esc(label)}"
-      width="${w}" height="${h}" viewBox="0 ${top} ${w} ${h}">
+      width="${w}" height="${h}" viewBox="${left} ${top} ${w} ${h}">
     <style>${SVG_STYLE}</style>
     <defs>
       ${MARKERS}
     </defs>
-    <rect data-export="background" x="0" y="${top}" width="${w}" height="${h}" fill="#ffffff"/>
-    <g data-export="content">${edgeSvg}${analysisSvg}${freeSvg}${boxSvg}</g>
+    <rect data-export="background" x="${left}" y="${top}" width="${w}" height="${h}" fill="#ffffff"/>
+    <g data-export="content">${bandes.svg}${edgeSvg}${analysisSvg}${freeSvg}${boxSvg}</g>
   </svg>`
 }

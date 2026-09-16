@@ -91,8 +91,14 @@ passe par-dessus, pour ne pas traverser les boîtes voisines.
 
 ### Sens de lecture
 
-Les **données détaillées sont en bas**, l'agrégation monte, et les analyses
-forment la bande du haut — l'orientation de la planche p.35. Les flèches
+Le diagramme est découpé en trois **bandes**, séparées par des pointillés
+comme sur la planche p.35 : **Données détaillées** en bas, **Données
+agrégées** au milieu, **Analyses** en haut. Les données détaillées sont donc
+en bas et l'agrégation monte.
+
+La bande *Analyses* n'apparaît que s'il existe une analyse, et aucun séparateur
+n'est tracé tant qu'il n'y a rien à séparer — un treillis réduit à sa table de
+faits reste nu. Les flèches
 bleues montent (un agrégat est calculé depuis ce qui est sous lui), les
 flèches sombres des analyses descendent vers l'agrégat qui les sert.
 
@@ -214,9 +220,7 @@ Deux écarts d'affichage avec la planche, sans conséquence sur le treillis
 lui-même :
 
 Seule différence restante avec la planche : elle place `(Agg1)` et `(Agg2)`
-entre parenthèses à droite des boîtes, l'app les écrit sans parenthèses. Les
-bandes horizontales en pointillés (« Analyses », « Données agrégées »,
-« Données détaillées ») ne sont pas dessinées.
+entre parenthèses à droite des boîtes, l'app les écrit sans parenthèses.
 
 ## Passerelle avec l'app de modélisation OLAP
 
@@ -332,7 +336,7 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-57 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+61 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
 SQL de la p.62, la décomposition des moyennes, l'échappement des identifiants,
 les attributs faibles, l'élagage de la sélection, le tracé des liens qui

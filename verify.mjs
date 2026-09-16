@@ -488,6 +488,47 @@ check('rendu -- une extremite absente n’est pas dessinee, et ne casse rien', (
   assert.match(svg, /data-key="0,0"/, 'le reste du diagramme tient')
 })
 
+check('p.35 -- les trois bandes et leurs deux separateurs', () => {
+  const m = modele()
+  m.items.push({ key: '0,2', rank: 2, label: 'annee', tag: 'Agg2' })
+  const svg = diagramSvg(m)
+  const libelles = [...svg.matchAll(/class="bande"[^>]*>([^<]+)</g)].map((x) => x[1])
+  assert.deepEqual(libelles, ['Données détaillées', 'Données agrégées', 'Analyses'])
+  assert.equal((svg.match(/class="bande-ligne"/g) ?? []).length, 2)
+})
+
+check('bandes -- la bande Analyses disparait s’il n’y a pas d’analyse', () => {
+  const m = modele()
+  m.analyses = []
+  const svg = diagramSvg(m)
+  const libelles = [...svg.matchAll(/class="bande"[^>]*>([^<]+)</g)].map((x) => x[1])
+  assert.deepEqual(libelles, ['Données détaillées', 'Données agrégées'])
+  assert.equal((svg.match(/class="bande-ligne"/g) ?? []).length, 1, 'un seul separateur')
+})
+
+check('bandes -- sans agregat ni analyse, il n’y a rien a separer', () => {
+  const svg = diagramSvg({
+    ...modele(),
+    items: [{ key: '0,0', rank: 0, label: 'codeP, codeT', tag: 'VENTES' }],
+    analyses: [],
+    edges: [],
+    freeArrows: [],
+  })
+  assert.ok(!svg.includes('class="bande'), 'une seule bande ne se separe pas d’elle-meme')
+  assert.match(svg, /viewBox="0 /, 'et le cadre ne recule pas pour des libelles absents')
+})
+
+check('bandes -- les libelles tiennent dans le cadre, et sortent a l’export', () => {
+  const svg = diagramSvg(modele())
+  const [x] = svg.match(/viewBox="(-?[\d.]+) /).slice(1).map(Number)
+  assert.ok(x < -100, `le cadre doit reculer pour loger les libelles (x = ${x})`)
+  // le fond suit le cadre, sinon l'export laisserait une marge transparente
+  assert.match(svg, new RegExp(`data-export="background" x="${x}"`))
+  // et les bandes sont DANS le groupe exporte, donc presentes dans l'image
+  const contenu = svg.slice(svg.indexOf('data-export="content"'))
+  assert.match(contenu, /class="bande"/)
+})
+
 /* --- trace des liens --------------------------------------------------- */
 
 /** abscisse d'une cubique, pour verifier ou la courbe passe vraiment */
