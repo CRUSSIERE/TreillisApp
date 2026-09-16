@@ -32,6 +32,22 @@ export function labelOf(node, dimensions) {
   return node.map((_, d) => levelName(node, dimensions, d)).join(', ')
 }
 
+/**
+ * Libelle affiche : une dimension au niveau `All` n'apporte rien a la lecture,
+ * on la tait. Le noeud tout en haut du treillis n'a plus alors aucun niveau a
+ * montrer -- il reste `All`, qui dit bien ce qu'il est : le total.
+ *
+ * Reste injectif tant que deux dimensions ne partagent pas un nom de niveau :
+ * deux noeuds distincts different sur au moins une dimension, et la taire d'un
+ * cote la laisse visible de l'autre.
+ */
+export function displayLabel(node, dimensions) {
+  const vus = node
+    .map((_, d) => levelName(node, dimensions, d))
+    .filter((name) => name !== ALL)
+  return vus.length ? vus.join(', ') : ALL
+}
+
 export function latticeSize(dimensions) {
   return dimensions.reduce((n, d) => n * (d.levels.length + 1), 1)
 }
@@ -187,6 +203,21 @@ export function analysisIssue(levels, targetKey, dimensions) {
   return dimensions.map((d, i) => (target[i] > levels[i] ? d.name : null)).filter(Boolean)
 }
 
+/**
+ * Attributs faibles utilisables par une analyse. Un attribut faible depend de
+ * SON parametre (p.8 : "dont la valeur depend de la valeur du parametre
+ * associe") : `nom` n'a de sens que si CLIENTS est au niveau `codeC`. Il
+ * n'ajoute aucune granularite -- c'est une colonne de plus, pas un axe --
+ * donc il ne change pas quel agregat repond a l'analyse.
+ */
+export function availableWeak(levels, dimensions) {
+  return dimensions.flatMap((d, i) => (d.weak?.[levels[i]] ?? []).map((name) => ({
+    dimension: d.name,
+    level: d.levels[levels[i]],
+    name,
+  })))
+}
+
 /** Agg1, Agg2... dans l'ordre topologique ; la base garde le nom du fait. */
 export function aggregateNames(materializedKeys, dimensions, factName = 'FAITS') {
   const base = baseKey(dimensions)
@@ -264,6 +295,9 @@ export function toOwnFormat(state) {
     dimensions: state.dimensions.map((d) => ({
       name: d.name,
       levels: d.levels,
+      // tableau parallele a `levels` : weak[i] liste les attributs faibles du
+      // niveau levels[i]. Omis quand il n'y en a aucun.
+      ...(Object.keys(d.weak ?? {}).length ? { weak: d.weak } : {}),
       ...(d.hierarchies?.length ? { hierarchies: d.hierarchies } : {}),
     })),
     materialized: state.materialized,
@@ -271,6 +305,7 @@ export function toOwnFormat(state) {
     // forme qu'il avait avant que ces deux champs existent
     ...(Object.keys(state.sources ?? {}).length ? { sources: state.sources } : {}),
     ...(state.analyses?.length ? { analyses: state.analyses } : {}),
+    ...(state.freeArrows?.length ? { freeArrows: state.freeArrows } : {}),
     mode: state.mode,
   }
 }
@@ -290,9 +325,16 @@ export function fromOwnFormat(json) {
     if (!Array.isArray(d.levels) || !d.levels.every((l) => typeof l === 'string')) {
       fail(`dimensions[${i}].levels doit etre un tableau de chaines`)
     }
+    const weak = {}
+    if (d.weak && typeof d.weak === 'object') {
+      for (const [i, liste] of Object.entries(d.weak)) {
+        if (Array.isArray(liste)) weak[i] = liste.filter((x) => typeof x === 'string')
+      }
+    }
     return {
       name: d.name,
       levels: [...d.levels],
+      weak,
       hierarchies: Array.isArray(d.hierarchies) ? d.hierarchies : [],
     }
   })
@@ -318,6 +360,10 @@ export function fromOwnFormat(json) {
       name: a.name,
       levels: [...a.levels],
       measure: typeof a.measure === 'string' ? a.measure : (measures[0]?.name ?? ''),
+      // les attributs faibles affiches par l'analyse : des colonnes de plus,
+      // sans effet sur la granularite ni sur le rattachement
+      extras: Array.isArray(a.extras) ? a.extras.filter((x) => typeof x === 'string') : [],
+      id: typeof a.id === 'string' ? a.id : `an${i}`,
       // rattachement impose ; absent = calcule par analysisSource
       ...(typeof a.target === 'string' ? { target: a.target } : {}),
     }
@@ -332,6 +378,12 @@ export function fromOwnFormat(json) {
     ),
     sources,
     analyses,
+    // fleches tracees a la main, hors semantique du treillis : on ne verifie
+    // que la forme, pas que les extremites existent -- pruneSelection s'en
+    // charge a chaque rendu
+    freeArrows: (Array.isArray(json.freeArrows) ? json.freeArrows : [])
+      .filter((a) => a && typeof a.from === 'string' && typeof a.to === 'string')
+      .map((a) => ({ from: a.from, to: a.to, label: typeof a.label === 'string' ? a.label : '' })),
     mode: json.mode === 'partial' ? 'partial' : 'complete',
   }
 }
@@ -364,6 +416,10 @@ export function fromOlapSchema(json) {
     const nameOf = new Map((d.parameters ?? []).map((p) => [p.id, p.name]))
     // plusieurs hierarchies = plusieurs axes possibles ; l'UI laisse choisir,
     // la premiere sert de defaut
+    // p.8 : un attribut faible complete la semantique d'UN parametre
+    const weakOf = new Map(
+      (d.parameters ?? []).map((p) => [p.name, (p.weakAttributes ?? []).map((w) => w.name)]),
+    )
     const hierarchies = (d.hierarchies ?? [])
       .map((h) => ({
         name: h.name || 'H',
@@ -375,7 +431,12 @@ export function fromOlapSchema(json) {
     const fallbackKey = nameOf.get(d.keyParameterId)
     const levels = hierarchies[0]?.levels ?? (fallbackKey ? [fallbackKey] : [])
 
-    return { name: d.name, levels, hierarchies }
+    const weak = {}
+    levels.forEach((niveau, i) => {
+      const liste = weakOf.get(niveau) ?? []
+      if (liste.length) weak[i] = liste
+    })
+    return { name: d.name, levels, weak, hierarchies }
   })
 
   return { factName, measures, dimensions: dimensions.filter((d) => d.levels.length > 0) }
@@ -391,13 +452,31 @@ export function fromOlapSchema(json) {
  * opaques : le lien paraitrait coupe, voire rattache au mauvais noeud. On le
  * fait donc contourner par la droite, au large de tout ce qu'il enjambe.
  */
-export function linkPath(x1, y1, x2, y2, rowA, rowB, rowBounds) {
+export function linkPath(x1, y1, x2, y2, rowA, rowB, rowBounds, boxHeight = 30) {
   const lo = Math.min(rowA, rowB)
   const hi = Math.max(rowA, rowB)
-  if (hi - lo <= 1) return { d: `M${x1},${y1} L${x2},${y2}`, maxX: Math.max(x1, x2) }
+  const droite = { d: `M${x1},${y1} L${x2},${y2}`, maxX: Math.max(x1, x2) }
+  if (hi - lo <= 1) return droite
 
+  // Enjamber une rangee ne gene que si le segment coupe VRAIMENT une de ses
+  // boites. Courber sans verifier envoyait un lien partant du bord gauche
+  // faire un long detour par la droite alors que la droite passait au large.
+  const xA = (y) => (y2 === y1 ? x1 : x1 + ((x2 - x1) * (y - y1)) / (y2 - y1))
   let right = Math.max(x1, x2)
-  for (let r = lo + 1; r < hi; r++) right = Math.max(right, rowBounds[r].right)
+  let heurte = false
+  for (let r = lo + 1; r < hi; r++) {
+    const rangee = rowBounds[r]
+    const xh = xA(rangee.y)
+    const xb = xA(rangee.y + boxHeight)
+    const min = Math.min(xh, xb)
+    const max = Math.max(xh, xb)
+    for (const b of rangee.boxes ?? []) {
+      if (max > b.x - 6 && min < b.x + b.w + 6) heurte = true
+    }
+    right = Math.max(right, rangee.right)
+  }
+  if (!heurte) return droite
+
   const sommet = right + 26
 
   // Une cubique n'atteint PAS ses points de controle : avec les deux controles

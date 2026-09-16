@@ -64,6 +64,10 @@
   }
   .dim { border: 1px solid var(--line); border-radius: 7px; padding: 10px; margin-bottom: 10px; }
   .dim .levels { margin: 6px 0 0 10px; padding-left: 10px; border-left: 2px solid var(--line); }
+  .cases { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; }
+  .cases label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+  .row.faibles { margin: -2px 0 8px 0; }
+  .row.faibles input { font-size: 12px; color: var(--muted); }
   .dim .all { color: var(--muted); font-style: italic; padding: 5px 0 0 8px; font-size: 13px; }
   .add { width: 100%; margin-top: 4px; }
   .row .grow { flex: 1; }
@@ -148,12 +152,12 @@
 import {
   AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
   derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, keyOf, latticeSize,
-  analysisIssue, labelOf, linkPath, parseKey, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
+  analysisIssue, availableWeak, displayLabel, linkPath, parseKey, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
   // ?v= : index.html et lattice.js ont chacun leur cache de 10 min sur
   // GitHub Pages. Sans ce marqueur, une page fraiche peut charger un module
   // perime, qui n'exporte pas encore ce qu'elle importe -> page blanche.
   // A INCREMENTER a chaque modification de lattice.js.
-} from './lattice.js?v=4'
+} from './lattice.js?v=7'
 
 /* ------------------------------------------------------------------ */
 /* Etat                                                                */
@@ -173,6 +177,7 @@ const EXEMPLE_COURS = () => ({
   materialized: [],
   sources: {}, // cle d'agregat -> cle de sa source imposee ; absent = automatique
   analyses: [],
+  freeArrows: [], // tracees a la main, sans rapport avec l'ordre du treillis
   mode: 'complete',
 })
 
@@ -224,18 +229,30 @@ function pruneSelection() {
 
   // meme logique pour les analyses : un niveau par dimension, dans les bornes
   const cibles = new Set([...state.materialized, base])
-  state.analyses = (state.analyses ?? []).map((a) => {
+  state.analyses = (state.analyses ?? []).map((a, i) => {
     const { target, ...reste } = a
+    const levels = dims.map((d, j) => {
+      const v = a.levels?.[j]
+      return Number.isInteger(v) && v >= 0 && v <= d.levels.length ? v : 0
+    })
+    const dispo = new Set(availableWeak(levels, dims).map((w) => w.name))
     return {
       ...reste,
-      levels: dims.map((d, i) => {
-        const v = a.levels?.[i]
-        return Number.isInteger(v) && v >= 0 && v <= d.levels.length ? v : 0
-      }),
+      id: a.id ?? `an${Date.now().toString(36)}${i}`,
+      levels,
+      // un attribut faible ne vaut qu'au niveau dont il depend : changer ce
+      // niveau le retire de l'analyse
+      extras: (a.extras ?? []).filter((x) => dispo.has(x)),
       // un rattachement impose vers un agregat supprime redevient automatique
       ...(target && cibles.has(target) ? { target } : {}),
     }
   })
+
+  // une fleche libre dont une extremite a disparu n'a plus de sens
+  const presentes = new Set([...cibles, ...state.analyses.map((a) => `A:${a.id}`)])
+  state.freeArrows = (state.freeArrows ?? []).filter(
+    (f) => presentes.has(f.from) && presentes.has(f.to),
+  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -269,6 +286,11 @@ function renderPanel() {
               title="Vers le plus général"${j === d.levels.length - 1 ? ' disabled' : ''}>&#9660;</button>
             <button class="icon" data-act="del-level" data-d="${i}" data-l="${j}"
               title="Supprimer ce niveau">&times;</button>
+          </div>
+          <div class="row faibles">
+            <input type="text" data-field="weak" data-d="${i}" data-l="${j}"
+              placeholder="attributs faibles, séparés par des virgules"
+              value="${esc((d.weak?.[j] ?? []).join(', '))}">
           </div>`,
         )
         .join('')
@@ -318,7 +340,50 @@ function renderPanel() {
 
     <h2>Analyses</h2>
     ${renderAnalyses()}
+
+    <h2>Flèches libres</h2>
+    ${renderFreeArrows()}
   `
+}
+
+/** Fleches tracees a la main entre deux elements quelconques du schema.
+ *  Elles ne disent rien du treillis -- ni derivation, ni rattachement : elles
+ *  servent a annoter. D'ou le violet, distinct des deux autres familles. */
+function renderFreeArrows() {
+  const boites = drawnBoxes()
+  if (boites.length < 2) {
+    return '<p class="hint">Il faut au moins deux éléments affichés.</p>'
+  }
+  const options = (choisi) =>
+    boites
+      .map((b) => `<option value="${esc(b.key)}"${b.key === choisi ? ' selected' : ''}>${esc(b.label)}</option>`)
+      .join('')
+
+  const rows = state.freeArrows
+    .map(
+      (f, i) => `<div class="dim">
+        <div class="row">
+          <input type="text" class="grow" data-field="arrow-label" data-i="${i}"
+            placeholder="libellé (facultatif)" value="${esc(f.label ?? '')}">
+          <button class="icon" data-act="del-arrow" data-i="${i}" title="Supprimer la flèche">&times;</button>
+        </div>
+        <div class="row">
+          <span class="dlabel">de</span>
+          <select data-field="arrow-from" data-i="${i}">${options(f.from)}</select>
+        </div>
+        <div class="row">
+          <span class="dlabel">vers</span>
+          <select data-field="arrow-to" data-i="${i}">${options(f.to)}</select>
+        </div>
+      </div>`,
+    )
+    .join('')
+
+  return `
+    <p class="hint">Relie deux éléments quelconques, sans rapport avec l’ordre
+      du treillis. Purement graphique : sans effet sur le SQL.</p>
+    ${rows}
+    <button class="add" data-act="add-arrow">+ flèche</button>`
 }
 
 /** Les requetes frequentes de la p.35. Une analyse ne se rattache pas a la
@@ -364,6 +429,19 @@ function renderAnalyses() {
           ${options}
         </select>
       </div>`
+      const faibles = availableWeak(a.levels, dims)
+      const casesFaibles = faibles.length
+        ? `<div class="row"><span class="dlabel">attributs faibles</span>
+             <span class="grow cases">${faibles
+               .map(
+                 (w) => `<label title="${esc(`${w.dimension} · ${w.level}`)}">
+                   <input type="checkbox" data-field="ana-extra" data-i="${i}"
+                     data-n="${esc(w.name)}"${a.extras?.includes(w.name) ? ' checked' : ''}>
+                   ${esc(w.name)}</label>`,
+               )
+               .join('')}</span>
+           </div>`
+        : ''
       const etat = manque.length
         ? `<p class="hint alerte">⚠ ${esc(names.get(cible) ?? '?')} est trop agrégé sur
              ${esc(manque.join(', '))} : il ne peut pas répondre à cette analyse.</p>`
@@ -385,6 +463,7 @@ function renderAnalyses() {
           </select>
         </div>
         ${selects}
+        ${casesFaibles}
         ${pointe}
         ${etat}
       </div>`
@@ -487,6 +566,10 @@ const SVG_STYLE = `
   .edge.analysis { stroke: #334155; stroke-width: 1.6; }
   /* rattachement impose que l'agregat ne peut pas honorer */
   .edge.analysis.invalide { stroke: #b91c1c; stroke-dasharray: 4 3; }
+  .edge.libre { stroke: #7c3aed; stroke-width: 1.6; stroke-dasharray: 6 4; }
+  .node text.tag.libre { fill: #7c3aed; }
+  text.tag.libre { font: 10.5px system-ui, sans-serif; fill: #7c3aed; text-anchor: start; }
+  text.tag.libre.centre { text-anchor: middle; }
   /* pointilles = source choisie a la main, trait plein = calcul automatique */
   .edge.forced { stroke-dasharray: 5 3; }
   /* a cote de la boite, pas au-dessus : la pointe de fleche y arrive.
@@ -531,10 +614,39 @@ function layout(nodes, analyses) {
       placed.set(n.key, { ...n, x, y, w: nodeWidth(n.label), h: NODE_H, row: r })
       x += slotWidth(n) + GAP_X
     }
-    rowBounds.push({ left, right: x - GAP_X })
+    rowBounds.push({
+      y,
+      left,
+      right: x - GAP_X,
+      boxes: row.map((n) => ({ x: placed.get(n.key).x, w: placed.get(n.key).w })),
+    })
   })
 
   return { placed, width, height: MARGIN * 2 + rows.length * step - GAP_Y, rowBounds }
+}
+
+/** Ce que le canvas affiche en ce moment : le panneau des fleches libres ne
+ *  doit proposer que des extremites reellement visibles. */
+function drawnBoxes() {
+  const dims = axes()
+  if (dims.length === 0) return []
+  let nodes
+  try {
+    nodes = buildLattice(dims).nodes
+  } catch {
+    return []
+  }
+  const base = baseKey(dims)
+  const mats = new Set([...state.materialized, base])
+  const names = aggregateNames([...mats], dims, state.factName)
+  const visibles = state.mode === 'partial' ? nodes.filter((n) => mats.has(n.key)) : nodes
+  return [
+    ...visibles.map((n) => ({
+      key: n.key,
+      label: `${names.get(n.key) ? names.get(n.key) + ' — ' : ''}${displayLabel(parseKey(n.key), dims)}`,
+    })),
+    ...state.analyses.map((a) => ({ key: `A:${a.id}`, label: a.name })),
+  ]
 }
 
 function renderCanvas() {
@@ -574,11 +686,16 @@ function renderCanvas() {
   const analyses = state.analyses.map((a, i) => {
     const measure = state.measures.find((m) => m.name === a.measure)
     return {
-      key: `A:${i}`,
+      // cle stable : une fleche libre visant cette analyse doit survivre a la
+      // suppression d'une autre, ce qu'un index de position ne permet pas
+      key: `A:${a.id}`,
       rank: 0,
       label: a.name,
       levels: a.levels, // le trace s'en sert pour juger le rattachement
-      tag: `${measure ? `${measure.agg}(${measure.name}) · ` : ''}${labelOf(a.levels, dims)}`,
+      tag:
+        `${measure ? `${measure.agg}(${measure.name}) · ` : ''}` +
+        displayLabel(a.levels, dims) +
+        (a.extras?.length ? ` + ${a.extras.join(', ')}` : ''),
       // rattachement impose s'il designe encore un noeud materialise,
       // sinon celui que l'app calcule
       target: a.target && mats.has(a.target) ? a.target : analysisSource(a.levels, [...mats], dims),
@@ -586,7 +703,13 @@ function renderCanvas() {
     }
   })
 
-  const items = nodes.map((n) => ({ ...n, tag: tagOf(n.key) }))
+  // `All` ne s'affiche pas : une dimension totalement agregee n'apporte rien
+  // a la lecture du noeud
+  const items = nodes.map((n) => ({
+    ...n,
+    label: displayLabel(parseKey(n.key), dims),
+    tag: tagOf(n.key),
+  }))
   const { placed, width, height, rowBounds } = layout(items, analyses)
 
   const edges = partial
@@ -640,7 +763,55 @@ function renderCanvas() {
     })
     .join('')
 
+  // Fleches libres : aucune semantique de treillis, elles reliant ce que
+  // l'utilisateur veut. Tracees en violet pour ne pas se confondre avec les
+  // derivations (bleu) ni les rattachements d'analyse (sombre).
+  // Fleches libres : aucune semantique de treillis, elles relient ce que
+  // l'utilisateur veut. Violet, pour ne se confondre ni avec les derivations
+  // (bleu) ni avec les rattachements d'analyse (sombre).
+  let minY = 0
+  const freeSvg = state.freeArrows
+    .map((f) => {
+      const a = placed.get(f.from)
+      const b = placed.get(f.to)
+      if (!a || !b || f.from === f.to) return ''
+      const xa = a.x + a.w / 2
+      const xb = b.x + b.w / 2
+      let d
+      let etiq
+
+      if (a.row === b.row) {
+        // meme rangee : passer par le dessus. Tout droit, le trait traverserait
+        // les boites voisines et leurs etiquettes.
+        const arc = 34
+        d = `M${xa},${a.y} C${xa},${a.y - arc} ${xb},${b.y - arc} ${xb},${b.y - 7}`
+        minY = Math.min(minY, a.y - arc)
+        etiq = { x: (xa + xb) / 2, y: a.y - arc + 6, milieu: true }
+      } else {
+        const monte = a.y > b.y
+        const r = linkPath(
+          xa, monte ? a.y : a.y + a.h,
+          xb, monte ? b.y + b.h + 7 : b.y - 7,
+          a.row, b.row, rowBounds, NODE_H,
+        )
+        d = r.d
+        maxX = Math.max(maxX, r.maxX)
+        etiq = { x: (xa + xb) / 2 + 8, y: (a.y + b.y) / 2 + NODE_H / 2, milieu: false }
+      }
+
+      const texte = f.label
+        ? `<text class="tag libre${etiq.milieu ? ' centre' : ''}" x="${etiq.x}" y="${etiq.y}">${esc(f.label)}</text>`
+        : ''
+      return `<path class="edge libre" d="${d}" marker-end="url(#arrow-libre)">` +
+        `<title>${esc(f.label || 'flèche libre')}</title></path>${texte}`
+    })
+    .join('')
+
   const canvasWidth = Math.max(width, maxX + MARGIN)
+  // un arc au-dessus de la rangee du haut sort du cadre : on remonte l'origine
+  // du viewBox plutot que de deplacer tout le contenu
+  const top = Math.min(0, minY - 6)
+  const canvasHeight = height - top
 
   const boxSvg = [...placed.values()]
     .map((n) => {
@@ -671,7 +842,7 @@ function renderCanvas() {
     .join('')
 
   host.innerHTML = `<svg id="svg" xmlns="http://www.w3.org/2000/svg"
-      width="${canvasWidth}" height="${height}" viewBox="0 0 ${canvasWidth} ${height}">
+      width="${canvasWidth}" height="${canvasHeight}" viewBox="0 ${top} ${canvasWidth} ${canvasHeight}">
     <style>${SVG_STYLE}</style>
     <defs>
       <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4"
@@ -682,13 +853,17 @@ function renderCanvas() {
         markerWidth="7" markerHeight="7" orient="auto">
         <path d="M0,0 L8,4 L0,8 z" fill="#334155"/>
       </marker>
+      <marker id="arrow-libre" viewBox="0 0 8 8" refX="7" refY="4"
+        markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" fill="#7c3aed"/>
+      </marker>
       <marker id="arrow-invalide" viewBox="0 0 8 8" refX="7" refY="4"
         markerWidth="7" markerHeight="7" orient="auto">
         <path d="M0,0 L8,4 L0,8 z" fill="#b91c1c"/>
       </marker>
     </defs>
-    <rect data-export="background" x="0" y="0" width="${canvasWidth}" height="${height}" fill="#ffffff"/>
-    <g data-export="content">${edgeSvg}${analysisSvg}${boxSvg}</g>
+    <rect data-export="background" x="0" y="${top}" width="${canvasWidth}" height="${canvasHeight}" fill="#ffffff"/>
+    <g data-export="content">${edgeSvg}${analysisSvg}${freeSvg}${boxSvg}</g>
   </svg>`
 
   const total = lattice.nodes.length
@@ -769,13 +944,24 @@ $('#panel').addEventListener('click', (e) => {
       break
     case 'add-ana':
       state.analyses.push({
+        id: `an${Date.now().toString(36)}${state.analyses.length}`,
         name: `A${state.analyses.length + 1}`,
+        extras: [],
         levels: axes().map(() => 0),
         measure: state.measures[0]?.name ?? '',
       })
       break
     case 'del-ana':
       state.analyses.splice(Number(btn.dataset.i), 1)
+      break
+    case 'add-arrow': {
+      const boites = drawnBoxes()
+      if (boites.length < 2) return
+      state.freeArrows.push({ from: boites[0].key, to: boites[1].key, label: '' })
+      break
+    }
+    case 'del-arrow':
+      state.freeArrows.splice(Number(btn.dataset.i), 1)
       break
     default:
       return
@@ -794,6 +980,15 @@ $('#panel').addEventListener('input', (e) => {
     case 'level': state.dimensions[d].levels[Number(el.dataset.l)] = el.value; break
     case 'measure-name': state.measures[Number(el.dataset.m)].name = el.value; break
     case 'ana-name': state.analyses[Number(el.dataset.i)].name = el.value; break
+    case 'arrow-label': state.freeArrows[Number(el.dataset.i)].label = el.value; break
+    case 'weak': {
+      const dim = state.dimensions[d]
+      const liste = el.value.split(',').map((x) => x.trim()).filter(Boolean)
+      dim.weak = { ...(dim.weak ?? {}) }
+      if (liste.length) dim.weak[Number(el.dataset.l)] = liste
+      else delete dim.weak[Number(el.dataset.l)]
+      break
+    }
     default: return
   }
   renderCanvas()
@@ -801,7 +996,9 @@ $('#panel').addEventListener('input', (e) => {
 
 $('#panel').addEventListener('change', (e) => {
   const el = e.target
-  if (el.dataset.field === 'measure-agg') {
+  if (el.dataset.field === 'weak') {
+    render()
+  } else if (el.dataset.field === 'measure-agg') {
     state.measures[Number(el.dataset.m)].agg = el.value
     renderCanvas()
   } else if (el.dataset.field === 'agg-level') {
@@ -819,6 +1016,16 @@ $('#panel').addEventListener('change', (e) => {
     render()
   } else if (el.dataset.field === 'ana-level') {
     state.analyses[Number(el.dataset.i)].levels[Number(el.dataset.d)] = Number(el.value)
+    render()
+  } else if (el.dataset.field === 'ana-extra') {
+    const ana = state.analyses[Number(el.dataset.i)]
+    const nom = el.dataset.n
+    ana.extras = el.checked
+      ? [...new Set([...(ana.extras ?? []), nom])]
+      : (ana.extras ?? []).filter((x) => x !== nom)
+    render()
+  } else if (el.dataset.field === 'arrow-from' || el.dataset.field === 'arrow-to') {
+    state.freeArrows[Number(el.dataset.i)][el.dataset.field === 'arrow-from' ? 'from' : 'to'] = el.value
     render()
   } else if (el.dataset.field === 'ana-target') {
     // valeur vide = on rend la main au rattachement calcule

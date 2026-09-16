@@ -6,14 +6,17 @@
     { "name": "montant", "agg": "SUM" }
   ],
   "dimensions": [
-    { "name": "PRODUITS", "levels": ["codeP", "sous_categ", "categorie"] },
-    { "name": "TEMPS", "levels": ["codeT", "num_mois", "annee"] },
-    { "name": "CLIENTS", "levels": ["codeC", "ville", "pays"] }
+    { "name": "PRODUITS", "levels": ["codeP", "sous_categ", "categorie"],
+      "weak": { "0": ["description", "prix_unit"] } },
+    { "name": "TEMPS", "levels": ["codeT", "num_mois", "annee"],
+      "weak": { "1": ["lib_mois"] } },
+    { "name": "CLIENTS", "levels": ["codeC", "ville", "pays"],
+      "weak": { "0": ["nom", "prenom"] } }
   ],
   "materialized": ["0,1,0", "3,2,0"],
   "analyses": [
-    { "name": "A1", "levels": [0, 1, 0], "measure": "quantite" },
-    { "name": "A2", "levels": [3, 2, 0], "measure": "montant" }
+    { "id": "a1", "name": "A1", "measure": "quantite", "levels": [0, 1, 0], "extras": [] },
+    { "id": "a2", "name": "A2", "measure": "montant", "levels": [3, 2, 0], "extras": ["nom"] }
   ],
   "mode": "partial"
 }

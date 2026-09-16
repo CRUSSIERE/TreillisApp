@@ -65,6 +65,28 @@ Deux règles pour éviter les impasses :
 - amener un agrégat sur un nœud déjà retenu **fusionne** les deux lignes, il
   n'y a jamais de doublon.
 
+### Attributs faibles
+
+Un niveau peut porter des **attributs faibles** — `nom` sur `codeC`, `lib_mois`
+sur `num_mois`. Ils se saisissent sous chaque niveau, séparés par des virgules,
+et arrivent tout seuls à l'import depuis l'app de modélisation OLAP.
+
+Une analyse peut alors les cocher : c'est ainsi qu'on écrit le `Annee, Nom` de
+la planche p.35, alors que `Nom` n'est pas un niveau de hiérarchie. Un attribut
+faible **n'ajoute aucune granularité** — il dépend de son paramètre (p.8), donc
+c'est une colonne de plus, pas un axe : il ne change pas quel agrégat répond.
+
+Il ne vaut qu'**au niveau dont il dépend** : remonter CLIENTS de `codeC` à
+`ville` retire `nom` des analyses concernées, puisqu'il n'a plus de sens.
+
+### Flèches libres
+
+*+ flèche* relie **deux éléments quelconques** du schéma — deux agrégats, deux
+analyses, une analyse et la table de faits. Tracées en **violet pointillé**,
+avec un libellé facultatif. Purement graphiques : elles n'entrent ni dans les
+dérivations, ni dans le SQL. Une flèche entre deux éléments d'une même rangée
+passe par-dessus, pour ne pas traverser les boîtes voisines.
+
 ### Sens de lecture
 
 Les **données détaillées sont en bas**, l'agrégation monte, et les analyses
@@ -72,11 +94,16 @@ forment la bande du haut — l'orientation de la planche p.35. Les flèches
 bleues montent (un agrégat est calculé depuis ce qui est sous lui), les
 flèches sombres des analyses descendent vers l'agrégat qui les sert.
 
-Un lien qui **enjambe** une rangée — un agrégat calculé depuis deux niveaux
-plus bas, une analyse servie par un agrégat lointain — est tracé en courbe
-qui contourne par la droite. Une droite passerait derrière les boîtes
-intermédiaires, qui sont opaques : le lien paraîtrait coupé, voire rattaché
-au mauvais nœud. Survoler un lien affiche ce qu'il relie.
+Une dimension au niveau `All` **ne s'affiche pas** : elle n'apporte rien à la
+lecture du nœud. `All, annee, codeC` se lit donc `annee, codeC`, comme sur la
+planche. Le sommet du treillis, où tout est agrégé, garde le libellé `All` —
+c'est le total. Les nœuds restent discernables entre eux.
+
+Un lien qui **enjambe** une rangée n'est courbé que s'il traverserait
+vraiment une boîte intermédiaire ; sinon il reste droit. Une courbe
+systématique envoyait un lien partant du bord gauche faire un long détour par
+la droite alors que la droite passait au large. Survoler un lien affiche ce
+qu'il relie.
 
 ### Choisir la source d'un agrégat
 
@@ -162,15 +189,16 @@ puis les deux analyses de la bande du haut :
 | A1 | `SUM(quantite)` | `codeP` | `num_mois` | `codeC` | Agg1 |
 | A2 | `SUM(montant)` | `All` | `annee` | `codeC` | Agg2 |
 
+A2 coche en plus l'attribut faible **`nom`** de `codeC`, ce qui donne le
+`Annee, Nom` de la planche.
+
 Deux écarts d'affichage avec la planche, sans conséquence sur le treillis
 lui-même :
 
-- l'app écrit `All, annee, codeC` là où la planche écrit `annee, codeC` — une
-  dimension au niveau `All` reste affichée, comme sur la planche p.34
-  (`All, codeT`, `All, All`) ; elle n'apparaît ni dans le `SELECT` ni dans le
-  `GROUP BY` du SQL généré ;
-- `Nom` est un attribut faible de `codeC`, pas un niveau de hiérarchie : il ne
-  gradue pas l'axe CLIENTS et n'entre donc pas dans le treillis.
+Seule différence restante avec la planche : elle place `(Agg1)` et `(Agg2)`
+entre parenthèses à droite des boîtes, l'app les écrit sans parenthèses. Les
+bandes horizontales en pointillés (« Analyses », « Données agrégées »,
+« Données détaillées ») ne sont pas dessinées.
 
 ## Passerelle avec l'app de modélisation OLAP
 
@@ -203,9 +231,13 @@ par **Importer JSON** (sélection des agrégats comprise) :
     { "name": "quantite", "agg": "SUM" }   // SUM | COUNT | MIN | MAX | AVG
   ],
   "dimensions": [
-    { "name": "PRODUITS", "levels": ["codeP", "sous_categ", "categorie"] }
-    //                              du plus fin (la clé) au plus général,
-    //                              `All` implicite et non listé
+    {
+      "name": "PRODUITS",
+      "levels": ["codeP", "sous_categ", "categorie"],
+      //          du plus fin (la clé) au plus général, `All` implicite
+      "weak": { "0": ["description"] }  // attributs faibles, par indice de
+                                        // niveau. Facultatif.
+    }
   ],
   "materialized": ["0,1"],  // un nœud = un indice de niveau par dimension,
                             // dans l'ordre de `dimensions`. L'indice
@@ -214,7 +246,17 @@ par **Importer JSON** (sélection des agrégats comprise) :
     "0,1": "0,0"            // absent = calcul automatique. Facultatif.
   },
   "analyses": [             // facultatif
-    { "name": "A1", "levels": [0, 1], "measure": "quantite" }
+    {
+      "id": "a1",           // identité stable, visée par les flèches libres
+      "name": "A1",
+      "levels": [0, 1],
+      "measure": "quantite",
+      "extras": ["description"],  // attributs faibles affichés
+      "target": "0,0"             // rattachement imposé ; absent = calculé
+    }
+  ],
+  "freeArrows": [           // facultatif, purement graphique
+    { "from": "0,0", "to": "A:a1", "label": "note" }
   ],
   "mode": "complete"        // complete | partial
 }
@@ -250,10 +292,11 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-31 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+40 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
-SQL de la p.62, le tracé des liens qui enjambent une rangée, le round-trip
-JSON, et la conversion depuis le format d'appmodelisationolap.
+SQL de la p.62, les attributs faibles, le tracé des liens qui enjambent une
+rangée, le round-trip JSON, et la conversion depuis le format
+d'appmodelisationolap.
 
 ## Déploiement sur GitHub Pages
 

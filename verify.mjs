@@ -11,7 +11,9 @@ import {
   aggregateNames,
   baseKey,
   buildLattice,
+  availableWeak,
   canDerive,
+  displayLabel,
   derivations,
   fromOlapSchema,
   fromOwnFormat,
@@ -256,6 +258,68 @@ check('analyses -- le rattachement impose survit a l’aller-retour JSON', () =>
   assert.deepEqual(analysisIssue(relu.analyses[0].levels, relu.analyses[0].target, p35), ['TEMPS'])
 })
 
+check('affichage -- une dimension a All se tait dans le libelle', () => {
+  assert.equal(displayLabel(parseKey(AGG2), p35), 'annee, codeC', 'p.35 ecrit bien "annee, codeC"')
+  assert.equal(displayLabel(parseKey(AGG1), p35), 'codeP, num_mois, codeC')
+  // le sommet du treillis n'a plus aucun niveau a montrer : il reste le total
+  assert.equal(displayLabel([3, 3, 3], p35), 'All')
+  // le libelle technique, lui, garde tout : c'est ce que le SQL raisonne
+  assert.equal(labelOf(parseKey(AGG2), p35), 'All, annee, codeC')
+})
+
+check('affichage -- taire All ne confond pas deux noeuds distincts', () => {
+  const vus = new Set(buildLattice(p34).nodes.map((n) => displayLabel(n.index, p34)))
+  assert.equal(vus.size, 16, 'les 16 noeuds restent discernables')
+})
+
+/* --- attributs faibles -------------------------------------------------- */
+
+const p35faible = [
+  { name: 'PRODUITS', levels: ['codeP', 'sous_categ', 'categorie'], weak: {} },
+  { name: 'TEMPS', levels: ['codeT', 'num_mois', 'annee'], weak: { 1: ['lib_mois'] } },
+  { name: 'CLIENTS', levels: ['codeC', 'ville', 'pays'], weak: { 0: ['nom', 'prenom'] } },
+]
+
+check('p.35 -- "Nom" est utilisable dans une analyse au niveau codeC', () => {
+  // A2 = Annee, Nom : CLIENTS reste a codeC, donc `nom` est disponible
+  const dispo = availableWeak(parseKey(AGG2), p35faible).map((w) => w.name)
+  assert.deepEqual(dispo, ['nom', 'prenom'])
+})
+
+check('attributs faibles -- ils dependent de LEUR niveau, pas de la dimension', () => {
+  // CLIENTS remonte a `ville` : `nom` n'a plus de sens (p.8)
+  const aVille = availableWeak([0, 0, 1], p35faible).map((w) => w.name)
+  assert.deepEqual(aVille, [], 'nom depend de codeC, pas de ville')
+  // TEMPS au mois expose lib_mois
+  assert.deepEqual(availableWeak([0, 1, 0], p35faible).map((w) => w.name), ['lib_mois', 'nom', 'prenom'])
+})
+
+check('attributs faibles -- ils ne changent pas quel agregat repond', () => {
+  // `extras` est une colonne de plus, pas un axe : la granularite est intacte
+  assert.equal(analysisSource(parseKey(AGG2), [AGG1, AGG2], p35faible), AGG2)
+})
+
+/* --- fleches libres ----------------------------------------------------- */
+
+check('fleches libres -- elles traversent l’aller-retour JSON', () => {
+  const avec = {
+    factName: 'VENTES', measures: mesures,
+    dimensions: p35.map((d) => ({ ...d, hierarchies: [] })),
+    materialized: [AGG1], sources: {}, analyses: [],
+    freeArrows: [{ from: BASE, to: AGG1, label: 'chargement nocturne' }],
+    mode: 'partial',
+  }
+  const relu = fromOwnFormat(JSON.parse(JSON.stringify(toOwnFormat(avec))))
+  assert.deepEqual(relu.freeArrows, [{ from: BASE, to: AGG1, label: 'chargement nocturne' }])
+})
+
+check('fleches libres -- une entree mal formee est ecartee, pas gardee', () => {
+  const relu = fromOwnFormat({
+    dimensions: [], freeArrows: [{ from: 'x' }, { from: 'a', to: 'b' }, 'nimporte quoi'],
+  })
+  assert.deepEqual(relu.freeArrows, [{ from: 'a', to: 'b', label: '' }])
+})
+
 /* --- trace des liens --------------------------------------------------- */
 
 /** abscisse d'une cubique, pour verifier ou la courbe passe vraiment */
@@ -267,9 +331,25 @@ check('trace -- deux rangees voisines restent reliees en ligne droite', () => {
   assert.match(d, /^M100,300 L100,240$/)
 })
 
+check('trace -- enjamber une rangee SANS la toucher reste une ligne droite', () => {
+  // depart tout a gauche, boite intermediaire centree : la droite passe au large
+  const rangees = [
+    { y: 300, right: 400, boxes: [{ x: 60, w: 80 }] },
+    { y: 200, right: 400, boxes: [{ x: 280, w: 150 }] },
+    { y: 100, right: 400, boxes: [{ x: 300, w: 120 }] },
+  ]
+  const { d } = linkPath(100, 300, 340, 130, 0, 2, rangees)
+  assert.match(d, /^M100,300 L340,130$/, 'ne pas courber quand rien ne gene')
+})
+
 check('trace -- un lien qui enjambe une rangee passe AU LARGE de ses boites', () => {
-  // trois rangees enjambees, la plus large s'arretant a x = 260
-  const rangees = [{ right: 200 }, { right: 200 }, { right: 260 }, { right: 200 }]
+  // la boite intermediaire est pile sur le chemin : il faut contourner
+  const rangees = [
+    { y: 300, right: 200, boxes: [] },
+    { y: 240, right: 200, boxes: [] },
+    { y: 180, right: 260, boxes: [{ x: 60, w: 200 }] },
+    { y: 120, right: 200, boxes: [] },
+  ]
   const { d, maxX } = linkPath(100, 300, 100, 120, 0, 3, rangees)
 
   const [, bx] = d.match(/C([\d.]+),/).map(Number)
@@ -348,7 +428,7 @@ const exportOlap = {
       name: 'PRODUITS',
       keyParameterId: 'p1',
       parameters: [
-        { id: 'p1', name: 'codeP', weakAttributes: [] },
+        { id: 'p1', name: 'codeP', weakAttributes: [{ id: 'w2', name: 'description' }, { id: 'w3', name: 'prix_unit' }] },
         { id: 'p2', name: 'sous_categ', weakAttributes: [] },
         { id: 'p3', name: 'categorie', weakAttributes: [] },
         { id: 'p4', name: 'marque', weakAttributes: [] },
@@ -360,6 +440,11 @@ const exportOlap = {
     },
   ],
 }
+
+check('attributs faibles -- un import OLAP les recupere sur le bon niveau', () => {
+  const [produits] = fromOlapSchema(exportOlap).dimensions
+  assert.deepEqual(produits.weak, { 0: ['description', 'prix_unit'] })
+})
 
 check('import OLAP -- hierarchies[].path devient les niveaux du treillis', () => {
   const { factName, measures, dimensions } = fromOlapSchema(exportOlap)
