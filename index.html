@@ -163,7 +163,7 @@
  *
  *   >>> INCREMENTER A CHAQUE MODIFICATION D'UN MODULE <<<
  */
-const V = '13'
+const V = '14'
 
 const [modLattice, modRender, modFiles] = await Promise.all([
   import(`./lattice.js?v=${V}`),
@@ -199,6 +199,7 @@ const EXEMPLE_COURS = () => ({
   sources: {}, // cle d'agregat -> cle de sa source imposee ; absent = automatique
   analyses: [],
   freeArrows: [], // tracees a la main, sans rapport avec l'ordre du treillis
+  edgeBends: {}, // lien -> ecart de sa poignee au milieu du segment
   mode: 'complete',
 })
 
@@ -614,6 +615,7 @@ function renderCanvas() {
 
   const total = lattice.nodes.length
   host.innerHTML = diagramSvg({
+    bends: state.edgeBends,
     label: partial
       ? `Treillis partiel : ${mats.size} agrégats, ${analyses.length} analyses`
       : `Treillis complet : ${total} nœuds`,
@@ -815,6 +817,75 @@ $('#panel').addEventListener('change', (e) => {
       render()
     }
   }
+})
+
+/* ------------------------------------------------------------------ */
+/* Inflechir un lien sans le detacher                                  */
+/* ------------------------------------------------------------------ */
+
+/** coordonnees du pointeur dans le repere du SVG, quelle que soit l'echelle */
+function pointSvg(svg, e) {
+  const p = svg.createSVGPoint()
+  p.x = e.clientX
+  p.y = e.clientY
+  return p.matrixTransform(svg.getScreenCTM().inverse())
+}
+
+/**
+ * Glisser la poignee d'un lien l'inflechit ; ses deux extremites restent
+ * accrochees a leurs boites.
+ *
+ * On redessine A LA MAIN pendant le geste au lieu d'appeler renderCanvas() :
+ * celui-ci remplace tout le SVG, ce qui detruirait l'element en cours de
+ * capture et couperait le glisser des le premier mouvement. L'etat n'est
+ * ecrit qu'au relachement.
+ */
+$('#canvas').addEventListener('pointerdown', (e) => {
+  const main = e.target.closest('[data-bend]')
+  if (!main) return
+  e.preventDefault()
+
+  const svg = $('#svg')
+  const id = main.dataset.bend
+  const [mx, my] = main.dataset.mid.split(',').map(Number)
+  const trait = svg.querySelector(`[data-edge="${CSS.escape(id)}"]`)
+  const [x1, y1, x2, y2] = trait.dataset.ends.split(',').map(Number)
+  let ecart = null
+
+  main.setPointerCapture(e.pointerId)
+  main.style.cursor = 'grabbing'
+
+  const bouger = (ev) => {
+    const p = pointSvg(svg, ev)
+    ecart = { dx: p.x - mx, dy: p.y - my }
+    // C = 2P - M : une quadratique ne passe pas par son point de controle
+    trait.setAttribute('d', `M${x1},${y1} Q${2 * p.x - mx},${2 * p.y - my} ${x2},${y2}`)
+    main.setAttribute('cx', p.x)
+    main.setAttribute('cy', p.y)
+    main.classList.add('plie')
+  }
+
+  const finir = () => {
+    main.removeEventListener('pointermove', bouger)
+    main.removeEventListener('pointerup', finir)
+    main.removeEventListener('pointercancel', finir)
+    if (ecart) {
+      state.edgeBends[id] = ecart
+      renderCanvas() // le cadre peut avoir a s'elargir
+    }
+  }
+
+  main.addEventListener('pointermove', bouger)
+  main.addEventListener('pointerup', finir)
+  main.addEventListener('pointercancel', finir)
+})
+
+/* double-clic : le lien retrouve son trace automatique */
+$('#canvas').addEventListener('dblclick', (e) => {
+  const main = e.target.closest('[data-bend]')
+  if (!main || !state.edgeBends[main.dataset.bend]) return
+  delete state.edgeBends[main.dataset.bend]
+  renderCanvas()
 })
 
 /* Selection des noeuds a materialiser -- souris et clavier */

@@ -375,7 +375,16 @@ export function pruneSelection(selection, dimensions) {
     (f) => ancres.has(f.from) && ancres.has(f.to),
   )
 
-  return { materialized, sources, analyses, freeArrows }
+  // un pli designe un lien par ses deux extremites : si l'une disparait, le
+  // lien n'est plus trace et le pli n'a plus d'objet
+  const edgeBends = Object.fromEntries(
+    Object.entries(selection.edgeBends ?? {}).filter(([id]) => {
+      const [de, vers] = id.split('>')
+      return ancres.has(de) && ancres.has(vers)
+    }),
+  )
+
+  return { materialized, sources, analyses, freeArrows, edgeBends }
 }
 
 /** Ce qu'une selection contient de choix explicites -- ce qu'on perdrait a
@@ -413,6 +422,7 @@ export function toOwnFormat(state) {
     ...(Object.keys(state.sources ?? {}).length ? { sources: state.sources } : {}),
     ...(state.analyses?.length ? { analyses: state.analyses } : {}),
     ...(state.freeArrows?.length ? { freeArrows: state.freeArrows } : {}),
+    ...(Object.keys(state.edgeBends ?? {}).length ? { edgeBends: state.edgeBends } : {}),
     mode: state.mode,
   }
 }
@@ -491,6 +501,12 @@ export function fromOwnFormat(json) {
     freeArrows: (Array.isArray(json.freeArrows) ? json.freeArrows : [])
       .filter((a) => a && typeof a.from === 'string' && typeof a.to === 'string')
       .map((a) => ({ from: a.from, to: a.to, label: typeof a.label === 'string' ? a.label : '' })),
+    // inflechissement manuel d'un lien, en ecart au milieu du segment
+    edgeBends: Object.fromEntries(
+      Object.entries(json.edgeBends ?? {}).filter(
+        ([, v]) => v && Number.isFinite(v.dx) && Number.isFinite(v.dy),
+      ),
+    ),
     mode: json.mode === 'partial' ? 'partial' : 'complete',
   }
 }

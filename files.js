@@ -26,6 +26,9 @@ export function downloadJson(data, filename) {
  *  enfants dans l'espace de la racine. Le fond reste hors du groupe pour ne
  *  pas gonfler la boite. */
 function exportClone(svg, border = 16) {
+  // les affordances d'edition (poignees) vivent hors du groupe mesure : le
+  // recadrage les ignore donc naturellement, et il suffit de les retirer du
+  // clone pour qu'elles ne partent pas dans l'image
   const box = svg.querySelector('[data-export="content"]').getBBox()
   const x = box.x - border
   const y = box.y - border
@@ -34,6 +37,7 @@ function exportClone(svg, border = 16) {
 
   const clone = svg.cloneNode(true)
   clone.removeAttribute('id')
+  clone.querySelectorAll('[data-export="chrome"]').forEach((el) => el.remove())
   clone.setAttribute('viewBox', `${x} ${y} ${width} ${height}`)
   clone.setAttribute('width', String(width))
   clone.setAttribute('height', String(height))

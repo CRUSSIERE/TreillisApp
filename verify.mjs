@@ -31,7 +31,7 @@ import {
   toOwnFormat,
   toSql,
 } from './lattice.js'
-import { diagramSvg, layout, linkPath, nodeWidth } from './render.js'
+import { diagramSvg, edgeId, layout, linkPath, nodeWidth } from './render.js'
 
 let passed = 0
 function check(name, fn) {
@@ -527,6 +527,77 @@ check('bandes -- les libelles tiennent dans le cadre, et sortent a l’export', 
   // et les bandes sont DANS le groupe exporte, donc presentes dans l'image
   const contenu = svg.slice(svg.indexOf('data-export="content"'))
   assert.match(contenu, /class="bande"/)
+})
+
+/* --- inflechissement manuel des liens ----------------------------------- */
+
+/** abscisse/ordonnee d'une quadratique, pour verifier ou passe la courbe */
+const quad = (t, a, c, b) => (1 - t) ** 2 * a + 2 * (1 - t) * t * c + t ** 2 * b
+
+check('pli -- la courbe passe par la poignee, extremites inchangees', () => {
+  const m = modele()
+  const id = edgeId('0,0', '0,1')
+  const droit = diagramSvg(m).match(/<path class="edge deriv"[\s\S]*?\sd="([^"]+)"/)[1]
+  const plie = diagramSvg({ ...m, bends: { [id]: { dx: 60, dy: -25 } } })
+    .match(/<path class="edge deriv"[\s\S]*?\sd="([^"]+)"/)[1]
+
+  const [, x1, y1] = droit.match(/^M([\d.-]+),([\d.-]+)/).map(Number)
+  const [, fx, fy] = droit.match(/([\d.-]+),([\d.-]+)$/).map(Number)
+  assert.match(plie, /^M/)
+  assert.ok(plie.includes(' Q'), 'un pli donne une quadratique')
+
+  // MEME depart, MEME arrivee : le lien reste accroche a ses deux boites
+  assert.match(plie, new RegExp(`^M${x1},${y1} Q`))
+  assert.match(plie, new RegExp(`${fx},${fy}$`))
+
+  // et la courbe passe bien par le point lache : milieu + (60, -25)
+  const [cx, cy] = plie.match(/Q([\d.-]+),([\d.-]+) /).slice(1).map(Number)
+  assert.ok(Math.abs(quad(0.5, x1, cx, fx) - ((x1 + fx) / 2 + 60)) < 0.01)
+  assert.ok(Math.abs(quad(0.5, y1, cy, fy) - ((y1 + fy) / 2 - 25)) < 0.01)
+})
+
+check('pli -- il prime sur le contournement automatique', () => {
+  const m = modele()
+  m.items.push({ key: '0,2', rank: 2, label: 'haut', tag: '(Agg2)' })
+  m.edges.push({ from: '0,0', to: '0,2', deriv: true })
+  const id = edgeId('0,0', '0,2')
+  const svg = diagramSvg({ ...m, bends: { [id]: { dx: 5, dy: 5 } } })
+  // dans le SVG brut le `>` de l'identifiant est echappe ; le DOM le reparse,
+  // d'ou l'absence de probleme cote navigateur
+  const trace = svg.match(new RegExp(`data-edge="${id.replace('>', '&gt;')}"[^>]*\\sd="([^"]+)"`))[1]
+  assert.ok(trace.includes(' Q'), 'quadratique du pli, pas cubique du contournement')
+  assert.ok(!trace.includes(' C'), 'le contournement automatique est abandonne')
+})
+
+check('pli -- les poignees restent hors du contenu mesure', () => {
+  const svg = diagramSvg(modele())
+  const contenu = svg.slice(svg.indexOf('data-export="content"'), svg.indexOf('data-export="chrome"'))
+  assert.ok(!contenu.includes('poignee'), 'sinon elles gonfleraient le recadrage de l’export')
+  assert.match(svg.slice(svg.indexOf('data-export="chrome"')), /class="poignee/)
+})
+
+check('pli -- un lien dont une extremite disparait perd son pli', () => {
+  const sel = {
+    materialized: [AGG1],
+    sources: {},
+    analyses: [],
+    freeArrows: [],
+    edgeBends: { [edgeId(BASE, AGG1)]: { dx: 1, dy: 2 }, [edgeId(BASE, AGG2)]: { dx: 3, dy: 4 } },
+  }
+  const apres = pruneSelection(sel, p35)
+  assert.deepEqual(Object.keys(apres.edgeBends), [edgeId(BASE, AGG1)], 'Agg2 n’est pas materialise')
+})
+
+check('pli -- il traverse l’aller-retour JSON', () => {
+  const avec = {
+    factName: 'VENTES', measures: mesures,
+    dimensions: p35.map((d) => ({ ...d, hierarchies: [] })),
+    materialized: [AGG1], sources: {}, analyses: [], freeArrows: [],
+    edgeBends: { [edgeId(BASE, AGG1)]: { dx: -12.5, dy: 30 } },
+    mode: 'partial',
+  }
+  const relu = fromOwnFormat(JSON.parse(JSON.stringify(toOwnFormat(avec))))
+  assert.deepEqual(relu.edgeBends, { [edgeId(BASE, AGG1)]: { dx: -12.5, dy: 30 } })
 })
 
 /* --- trace des liens --------------------------------------------------- */

@@ -54,6 +54,10 @@ const SVG_STYLE = `
     text-anchor: start; dominant-baseline: middle;
   }
   .bande-ligne { stroke: #4a5da8; stroke-width: 1.2; stroke-dasharray: 9 6; }
+  /* poignee de deplacement d'un lien : affordance d'edition, retiree a l'export */
+  .poignee { fill: #fff; stroke: #9aa4b2; stroke-width: 1.4; opacity: .5; cursor: grab; }
+  .poignee:hover { opacity: 1; stroke: #2f6fd0; stroke-width: 2; }
+  .poignee.plie { opacity: 1; stroke: #2f6fd0; }
 `
 
 const MARKERS = [
@@ -156,6 +160,59 @@ export function linkPath(x1, y1, x2, y2, rowA, rowB, rowBounds, boxHeight = NODE
 }
 
 const centre = (b) => b.x + b.w / 2
+
+/** identite d'un lien, stable tant que ses deux extremites existent */
+export const edgeId = (from, to) => `${from}>${to}`
+
+/**
+ * Trace d'un lien, et position de sa poignee.
+ *
+ * Un pli enregistre (`bends[id]`) remplace le contournement automatique :
+ * l'utilisateur a pris la main, on ne discute plus. Le pli est stocke en
+ * ECART au milieu du segment, pas en absolu -- ainsi il suit les boites quand
+ * la disposition change.
+ */
+function traceLien(id, x1, y1, x2, y2, rowA, rowB, rowBounds, bends) {
+  const mx = (x1 + x2) / 2
+  const my = (y1 + y2) / 2
+  const pli = bends?.[id]
+
+  if (pli) {
+    const px = mx + pli.dx
+    const py = my + pli.dy
+    // une quadratique ne passe pas par son point de controle : Q(0,5) vaut
+    // (P0 + 2C + P2)/4, donc pour passer par la poignee il faut C = 2P - M
+    const cx = 2 * px - mx
+    const cy = 2 * py - my
+    return {
+      d: `M${x1},${y1} Q${cx},${cy} ${x2},${y2}`,
+      maxX: Math.max(x1, x2, px, cx),
+      minY: Math.min(y1, y2, py, cy),
+      poignee: { x: px, y: py },
+      mid: { x: mx, y: my },
+      plie: true,
+    }
+  }
+
+  const auto = linkPath(x1, y1, x2, y2, rowA, rowB, rowBounds)
+  return {
+    ...auto,
+    minY: Math.min(y1, y2),
+    poignee: { x: mx, y: my },
+    mid: { x: mx, y: my },
+    plie: false,
+  }
+}
+
+/** La poignee est une affordance d'edition : elle est rendue DANS UN GROUPE
+ *  A PART, hors du contenu mesure, pour que le recadrage de l'export l'ignore
+ *  et que le clone n'ait qu'a la supprimer. */
+function poigneeSvg(id, t) {
+  return `<circle class="poignee${t.plie ? ' plie' : ''}" ` +
+    `data-bend="${esc(id)}" data-mid="${t.mid.x},${t.mid.y}" ` +
+    `cx="${t.poignee.x}" cy="${t.poignee.y}" r="5">` +
+    `<title>Glisser pour infléchir — double-clic pour rétablir</title></circle>`
+}
 const BANDES = ['Données détaillées', 'Données agrégées', 'Analyses']
 
 /**
@@ -215,23 +272,29 @@ const titre = (t) => (t ? `<title>${esc(t)}</title>` : '')
 
 /** Derivations et roll-up : `from` est toujours le noeud le plus fin, donc le
  *  plus bas -- la fleche monte. */
-function drawEdges(edges, placed, rowBounds, nom, suivreX) {
+function drawEdges(edges, placed, rowBounds, nom, suivreX, suivreY, bends, poignees) {
   return edges
     .map(({ from, to, deriv, forced }) => {
       const a = placed.get(from)
       const b = placed.get(to)
       if (!a || !b) return ''
-      const { d, maxX } = linkPath(
-        centre(a), a.y,
-        centre(b), b.y + b.h + (deriv ? 7 : 0),
-        a.row, b.row, rowBounds,
-      )
-      suivreX(maxX)
+      const id = edgeId(from, to)
+      const x1 = centre(a)
+      const y1 = a.y
+      const x2 = centre(b)
+      const y2 = b.y + b.h + (deriv ? 7 : 0)
+      const tr = traceLien(id, x1, y1, x2, y2, a.row, b.row, rowBounds, bends)
+      suivreX(tr.maxX)
+      suivreY(tr.minY)
       const cls = `edge${deriv ? ' deriv' : ''}${forced ? ' forced' : ''}`
       const t = deriv
         ? `${nom(to)} calculé depuis ${nom(from)}${forced ? ' (source imposée)' : ''}`
         : ''
-      return `<path class="${cls}" d="${d}"${deriv ? ' marker-end="url(#arrow)"' : ''}>${titre(t)}</path>`
+      // le treillis complet est une grille reguliere : y ajouter 24 poignees
+      // n'aiderait personne, on ne les propose que sur les liens du partiel
+      return `<path class="${cls}" data-edge="${esc(id)}" data-ends="${x1},${y1},${x2},${y2}" ` +
+        `d="${tr.d}"${deriv ? ' marker-end="url(#arrow)"' : ''}>${titre(t)}</path>` +
+        (deriv ? (poignees.push(poigneeSvg(id, tr)), '') : '')
     })
     .join('')
 }
@@ -239,24 +302,29 @@ function drawEdges(edges, placed, rowBounds, nom, suivreX) {
 /** L'analyse est au-dessus de son agregat : cette fleche-la descend. Rouge
  *  pointille quand `issue` n'est pas vide -- le rattachement impose ne tient
  *  pas, et mieux vaut le montrer que dessiner une fleche qui ment. */
-function drawAnalyses(analyses, placed, rowBounds, nom, suivreX) {
+function drawAnalyses(analyses, placed, rowBounds, nom, suivreX, suivreY, bends, poignees) {
   return analyses
     .map((an) => {
       const from = placed.get(an.key)
       const to = placed.get(an.target)
       if (!from || !to) return ''
-      const { d, maxX } = linkPath(
-        centre(from), from.y + from.h,
-        centre(to), to.y - 7,
-        from.row, to.row, rowBounds,
-      )
-      suivreX(maxX)
+      const id = edgeId(an.key, an.target)
+      const x1 = centre(from)
+      const y1 = from.y + from.h
+      const x2 = centre(to)
+      const y2 = to.y - 7
+      const tr = traceLien(id, x1, y1, x2, y2, from.row, to.row, rowBounds, bends)
+      const { d } = tr
+      suivreX(tr.maxX)
+      suivreY(tr.minY)
       const invalide = an.issue?.length > 0
       const t = invalide
         ? `${an.label} : ${nom(an.target)} est trop agrégé sur ${an.issue.join(', ')}`
         : `${an.label} est servie par ${nom(an.target)}`
-      return `<path class="edge analysis${invalide ? ' invalide' : ''}" d="${d}" ` +
-        `marker-end="url(#${invalide ? 'arrow-invalide' : 'arrow-analyse'})">${titre(t)}</path>`
+      return `<path class="edge analysis${invalide ? ' invalide' : ''}" data-edge="${esc(id)}" ` +
+        `data-ends="${x1},${y1},${x2},${y2}" d="${d}" ` +
+        `marker-end="url(#${invalide ? 'arrow-invalide' : 'arrow-analyse'})">${titre(t)}</path>` +
+        (poignees.push(poigneeSvg(id, tr)), '')
     })
     .join('')
 }
@@ -264,14 +332,17 @@ function drawAnalyses(analyses, placed, rowBounds, nom, suivreX) {
 /** Fleches libres : aucune semantique de treillis, elles relient ce que
  *  l'utilisateur veut. Violet, pour ne se confondre ni avec les derivations
  *  (bleu) ni avec les rattachements d'analyse (sombre). */
-function drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY) {
+function drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY, bends, poignees) {
   return freeArrows
     .map((f) => {
       const a = placed.get(f.from)
       const b = placed.get(f.to)
       if (!a || !b || f.from === f.to) return ''
+      const id = edgeId(f.from, f.to)
       let d
       let etiq
+      let tr = null // pas de poignee sur l'arc de meme rangee : il est deja
+      let bouts = '' // contraint a passer par-dessus, l'inflechir n'aiderait pas
 
       if (a.row === b.row) {
         // meme rangee : passer par le dessus. Tout droit, le trait traverserait
@@ -282,21 +353,23 @@ function drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY) {
         etiq = { x: (centre(a) + centre(b)) / 2, y: a.y - arc + 6, milieu: true }
       } else {
         const monte = a.y > b.y
-        const r = linkPath(
-          centre(a), monte ? a.y : a.y + a.h,
-          centre(b), monte ? b.y + b.h + 7 : b.y - 7,
-          a.row, b.row, rowBounds,
-        )
-        d = r.d
-        suivreX(r.maxX)
+        const y1 = monte ? a.y : a.y + a.h
+        const y2 = monte ? b.y + b.h + 7 : b.y - 7
+        tr = traceLien(id, centre(a), y1, centre(b), y2, a.row, b.row, rowBounds, bends)
+        d = tr.d
+        suivreX(tr.maxX)
+        suivreY(tr.minY)
         etiq = { x: (centre(a) + centre(b)) / 2 + 8, y: (a.y + b.y) / 2 + NODE_H / 2, milieu: false }
+        bouts = `${centre(a)},${y1},${centre(b)},${y2}`
       }
 
       const texte = f.label
         ? `<text class="tag libre${etiq.milieu ? ' centre' : ''}" x="${etiq.x}" y="${etiq.y}">${esc(f.label)}</text>`
         : ''
-      return `<path class="edge libre" d="${d}" marker-end="url(#arrow-libre)">` +
-        `${titre(f.label || 'flèche libre')}</path>${texte}`
+      return `<path class="edge libre"${bouts ? ` data-edge="${esc(id)}" data-ends="${bouts}"` : ''} ` +
+        `d="${d}" marker-end="url(#arrow-libre)">` +
+        `${titre(f.label || 'flèche libre')}</path>${texte}` +
+        (tr ? (poignees.push(poigneeSvg(id, tr)), '') : '')
     })
     .join('')
 }
@@ -343,7 +416,10 @@ function drawBoxes(placed, base, materialized, nom) {
  * porte sa cible et, le cas echeant, les dimensions qui l'empechent d'etre
  * servie. Ce module ne recalcule aucune semantique -- il place et il dessine.
  */
-export function diagramSvg({ items, analyses, edges, freeArrows, names, base, materialized, label = 'Treillis d’agrégats' }) {
+export function diagramSvg({
+  items, analyses, edges, freeArrows, names, base, materialized,
+  bends = {}, label = 'Treillis d’agrégats',
+}) {
   const { placed, width, height, rowBounds } = layout(items, analyses)
   const nom = (k) => names.get(k) ?? k
 
@@ -355,9 +431,10 @@ export function diagramSvg({ items, analyses, edges, freeArrows, names, base, ma
   const suivreY = (y) => { minY = Math.min(minY, y) }
 
   const bandes = drawBands(rowBounds, analyses.length > 0)
-  const edgeSvg = drawEdges(edges, placed, rowBounds, nom, suivreX)
-  const analysisSvg = drawAnalyses(analyses, placed, rowBounds, nom, suivreX)
-  const freeSvg = drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY)
+  const poignees = []
+  const edgeSvg = drawEdges(edges, placed, rowBounds, nom, suivreX, suivreY, bends, poignees)
+  const analysisSvg = drawAnalyses(analyses, placed, rowBounds, nom, suivreX, suivreY, bends, poignees)
+  const freeSvg = drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY, bends, poignees)
   const boxSvg = drawBoxes(placed, base, materialized, nom)
 
   // on deplace l'origine du viewBox plutot que de deplacer tout le contenu
@@ -377,5 +454,6 @@ export function diagramSvg({ items, analyses, edges, freeArrows, names, base, ma
     </defs>
     <rect data-export="background" x="${left}" y="${top}" width="${w}" height="${h}" fill="#ffffff"/>
     <g data-export="content">${bandes.svg}${edgeSvg}${analysisSvg}${freeSvg}${boxSvg}</g>
+    <g data-export="chrome">${poignees.join('')}</g>
   </svg>`
 }
