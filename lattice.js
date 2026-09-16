@@ -174,6 +174,19 @@ export function analysisSource(levels, materializedKeys, dimensions) {
   return best
 }
 
+/**
+ * Ce qui empeche un agregat de repondre a une analyse : les dimensions ou il
+ * est plus grossier qu'elle. Un agregat au mois ne peut pas repondre au jour,
+ * le detail n'existe plus. Tableau vide = rattachement valable.
+ *
+ * Sert au rattachement impose a la main : on laisse choisir, mais on dit quand
+ * le choix ne tient pas -- plutot que de dessiner une fleche qui ment.
+ */
+export function analysisIssue(levels, targetKey, dimensions) {
+  const target = parseKey(targetKey)
+  return dimensions.map((d, i) => (target[i] > levels[i] ? d.name : null)).filter(Boolean)
+}
+
 /** Agg1, Agg2... dans l'ordre topologique ; la base garde le nom du fait. */
 export function aggregateNames(materializedKeys, dimensions, factName = 'FAITS') {
   const base = baseKey(dimensions)
@@ -305,6 +318,8 @@ export function fromOwnFormat(json) {
       name: a.name,
       levels: [...a.levels],
       measure: typeof a.measure === 'string' ? a.measure : (measures[0]?.name ?? ''),
+      // rattachement impose ; absent = calcule par analysisSource
+      ...(typeof a.target === 'string' ? { target: a.target } : {}),
     }
   })
 

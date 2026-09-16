@@ -105,6 +105,19 @@ fin** pour y répondre — le moins de lignes à parcourir. Si une analyse retom
 sur la table de faits, c'est qu'aucun agrégat ne l'accélère ; le panneau
 l'indique sous chaque analyse (« servie par … »).
 
+Un agrégat ne peut répondre à une analyse **que s'il est au moins aussi fin
+qu'elle, sur chaque dimension**. Un agrégat au mois ne répond pas à une
+question au jour : le détail n'existe plus. C'est pourquoi une analyse définie
+sur `codeT` se rattache à la table de faits même si un agrégat au `num_mois`
+existe — il suffit de passer l'analyse au mois pour qu'elle s'y branche.
+
+La liste **« pointe vers »** permet de forcer le rattachement, comme pour la
+source d'un agrégat. À la différence de celle-ci, elle propose **tous** les
+agrégats, y compris ceux qui ne peuvent pas répondre : c'est utile pour
+dessiner une intention. Un rattachement intenable est alors tracé en
+**rouge pointillé**, et le panneau dit pourquoi (« Agg1 est trop agrégé sur
+TEMPS »), plutôt que de laisser croire à une flèche valide.
+
 ### Re-agrégation des mesures
 
 Le SQL tient compte du fait qu'un agrégat calculé depuis un autre agrégat ne
@@ -237,7 +250,7 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-28 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+31 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
 SQL de la p.62, le tracé des liens qui enjambent une rangée, le round-trip
 JSON, et la conversion depuis le format d'appmodelisationolap.

@@ -73,6 +73,7 @@
   }
   .row select[data-field="agg-level"] { flex: 1; min-width: 0; }
   .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  .hint.alerte { color: #b91c1c; }
 
   #view { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   #canvas { flex: 1; overflow: auto; padding: 20px; }
@@ -147,12 +148,12 @@
 import {
   AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
   derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, keyOf, latticeSize,
-  labelOf, linkPath, parseKey, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
+  analysisIssue, labelOf, linkPath, parseKey, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
   // ?v= : index.html et lattice.js ont chacun leur cache de 10 min sur
   // GitHub Pages. Sans ce marqueur, une page fraiche peut charger un module
   // perime, qui n'exporte pas encore ce qu'elle importe -> page blanche.
   // A INCREMENTER a chaque modification de lattice.js.
-} from './lattice.js?v=3'
+} from './lattice.js?v=4'
 
 /* ------------------------------------------------------------------ */
 /* Etat                                                                */
@@ -222,13 +223,19 @@ function pruneSelection() {
   )
 
   // meme logique pour les analyses : un niveau par dimension, dans les bornes
-  state.analyses = (state.analyses ?? []).map((a) => ({
-    ...a,
-    levels: dims.map((d, i) => {
-      const v = a.levels?.[i]
-      return Number.isInteger(v) && v >= 0 && v <= d.levels.length ? v : 0
-    }),
-  }))
+  const cibles = new Set([...state.materialized, base])
+  state.analyses = (state.analyses ?? []).map((a) => {
+    const { target, ...reste } = a
+    return {
+      ...reste,
+      levels: dims.map((d, i) => {
+        const v = a.levels?.[i]
+        return Number.isInteger(v) && v >= 0 && v <= d.levels.length ? v : 0
+      }),
+      // un rattachement impose vers un agregat supprime redevient automatique
+      ...(target && cibles.has(target) ? { target } : {}),
+    }
+  })
 }
 
 /* ------------------------------------------------------------------ */
@@ -341,7 +348,26 @@ function renderAnalyses() {
           </div>`,
         )
         .join('')
-      const servi = names.get(analysisSource(a.levels, mats, dims)) ?? '?'
+      const auto = analysisSource(a.levels, mats, dims)
+      const cible = a.target && mats.includes(a.target) ? a.target : auto
+      const manque = analysisIssue(a.levels, cible, dims)
+      const options = sortKeys(mats)
+        .map(
+          (k) =>
+            `<option value="${esc(k)}"${a.target === k ? ' selected' : ''}>${esc(names.get(k) ?? k)}</option>`,
+        )
+        .join('')
+      const pointe = `<div class="row">
+        <span class="dlabel">pointe vers</span>
+        <select data-field="ana-target" data-i="${i}">
+          <option value=""${a.target ? '' : ' selected'}>auto — ${esc(names.get(auto) ?? '')}</option>
+          ${options}
+        </select>
+      </div>`
+      const etat = manque.length
+        ? `<p class="hint alerte">⚠ ${esc(names.get(cible) ?? '?')} est trop agrégé sur
+             ${esc(manque.join(', '))} : il ne peut pas répondre à cette analyse.</p>`
+        : `<p class="hint">servie par <strong>${esc(names.get(cible) ?? '?')}</strong></p>`
       return `<div class="dim">
         <div class="row">
           <input type="text" class="grow" data-field="ana-name" data-i="${i}" value="${esc(a.name)}">
@@ -359,7 +385,8 @@ function renderAnalyses() {
           </select>
         </div>
         ${selects}
-        <p class="hint">servie par <strong>${esc(servi)}</strong></p>
+        ${pointe}
+        ${etat}
       </div>`
     })
     .join('')
@@ -458,6 +485,8 @@ const SVG_STYLE = `
   .node.base rect { fill: #fdf1e2; stroke: #b45309; stroke-width: 1.8; }
   .node.analysis rect { fill: #effaf1; stroke: #15803d; stroke-width: 1.8; }
   .edge.analysis { stroke: #334155; stroke-width: 1.6; }
+  /* rattachement impose que l'agregat ne peut pas honorer */
+  .edge.analysis.invalide { stroke: #b91c1c; stroke-dasharray: 4 3; }
   /* pointilles = source choisie a la main, trait plein = calcul automatique */
   .edge.forced { stroke-dasharray: 5 3; }
   /* a cote de la boite, pas au-dessus : la pointe de fleche y arrive.
@@ -548,8 +577,12 @@ function renderCanvas() {
       key: `A:${i}`,
       rank: 0,
       label: a.name,
+      levels: a.levels, // le trace s'en sert pour juger le rattachement
       tag: `${measure ? `${measure.agg}(${measure.name}) · ` : ''}${labelOf(a.levels, dims)}`,
-      target: analysisSource(a.levels, [...mats], dims),
+      // rattachement impose s'il designe encore un noeud materialise,
+      // sinon celui que l'app calcule
+      target: a.target && mats.has(a.target) ? a.target : analysisSource(a.levels, [...mats], dims),
+      impose: !!(a.target && mats.has(a.target)),
     }
   })
 
@@ -597,8 +630,13 @@ function renderCanvas() {
         from.row, to.row, rowBounds,
       )
       maxX = Math.max(maxX, mx)
-      return `<path class="edge analysis" d="${d}" marker-end="url(#arrow-analyse)">` +
-        `<title>${esc(`${an.label} est servie par ${names.get(an.target) ?? '?'}`)}</title></path>`
+      const manque = analysisIssue(an.levels, an.target, dims)
+      const titre = manque.length
+        ? `${an.label} : ${names.get(an.target) ?? '?'} est trop agrégé sur ${manque.join(', ')}`
+        : `${an.label} est servie par ${names.get(an.target) ?? '?'}`
+      return `<path class="edge analysis${manque.length ? ' invalide' : ''}" d="${d}" ` +
+        `marker-end="url(#${manque.length ? 'arrow-invalide' : 'arrow-analyse'})">` +
+        `<title>${esc(titre)}</title></path>`
     })
     .join('')
 
@@ -643,6 +681,10 @@ function renderCanvas() {
       <marker id="arrow-analyse" viewBox="0 0 8 8" refX="7" refY="4"
         markerWidth="7" markerHeight="7" orient="auto">
         <path d="M0,0 L8,4 L0,8 z" fill="#334155"/>
+      </marker>
+      <marker id="arrow-invalide" viewBox="0 0 8 8" refX="7" refY="4"
+        markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" fill="#b91c1c"/>
       </marker>
     </defs>
     <rect data-export="background" x="0" y="0" width="${canvasWidth}" height="${height}" fill="#ffffff"/>
@@ -777,6 +819,11 @@ $('#panel').addEventListener('change', (e) => {
     render()
   } else if (el.dataset.field === 'ana-level') {
     state.analyses[Number(el.dataset.i)].levels[Number(el.dataset.d)] = Number(el.value)
+    render()
+  } else if (el.dataset.field === 'ana-target') {
+    // valeur vide = on rend la main au rattachement calcule
+    if (el.value) state.analyses[Number(el.dataset.i)].target = el.value
+    else delete state.analyses[Number(el.dataset.i)].target
     render()
   } else if (el.dataset.field === 'ana-measure') {
     state.analyses[Number(el.dataset.i)].measure = el.value

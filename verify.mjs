@@ -18,6 +18,7 @@ import {
   labelOf,
   linkPath,
   latticeSize,
+  analysisIssue,
   analysisSource,
   parseKey,
   sortKeys,
@@ -224,6 +225,35 @@ check('panneau -- sortKeys range les agregats comme aggregateNames les nomme', (
     ['Agg1', 'Agg2', 'Agg3'],
   )
   assert.deepEqual(sortKeys(desordre), sortKeys(tries), 'le tri doit etre idempotent')
+})
+
+check('analyses -- un agregat trop grossier est nomme, dimension par dimension', () => {
+  // A1 au jour (codeP, codeT, codeC) contre Agg1 au mois : TEMPS bloque
+  assert.deepEqual(analysisIssue(parseKey(BASE), AGG1, p35), ['TEMPS'])
+  // Agg2 est plus grossier sur PRODUITS *et* TEMPS
+  assert.deepEqual(analysisIssue(parseKey(BASE), AGG2, p35), ['PRODUITS', 'TEMPS'])
+})
+
+check('analyses -- un rattachement valable ne signale rien', () => {
+  assert.deepEqual(analysisIssue(parseKey(AGG1), AGG1, p35), [])
+  assert.deepEqual(analysisIssue(parseKey(AGG1), BASE, p35), [], 'la table de faits repond a tout')
+  assert.deepEqual(analysisIssue(parseKey(AGG2), AGG1, p35), [])
+})
+
+check('analyses -- le rattachement impose survit a l’aller-retour JSON', () => {
+  const avec = {
+    factName: 'VENTES',
+    measures: mesures,
+    dimensions: p35.map((d) => ({ ...d, hierarchies: [] })),
+    materialized: [AGG1],
+    sources: {},
+    analyses: [{ name: 'A1', levels: parseKey(BASE), measure: 'quantite', target: AGG1 }],
+    mode: 'partial',
+  }
+  const relu = fromOwnFormat(JSON.parse(JSON.stringify(toOwnFormat(avec))))
+  assert.equal(relu.analyses[0].target, AGG1)
+  // et il reste signale comme intenable, l'import ne le "repare" pas en silence
+  assert.deepEqual(analysisIssue(relu.analyses[0].levels, relu.analyses[0].target, p35), ['TEMPS'])
 })
 
 /* --- trace des liens --------------------------------------------------- */
