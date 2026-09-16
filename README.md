@@ -244,6 +244,15 @@ Pas de build, pas de workflow : les fichiers sont servis tels quels.
 2. *Settings → Pages → Build and deployment → Source : **Deploy from a
    branch**, branche `main`, dossier `/ (root)`*.
 
+> **À chaque modification de `lattice.js`, incrémenter le `?v=` de son import
+> dans `index.html`.** GitHub Pages sert les deux fichiers avec
+> `Cache-Control: max-age=600`, mis en cache chacun de son côté : sans ce
+> marqueur, un visiteur peut récupérer un `index.html` neuf et garder un
+> `lattice.js` périmé, qui n'exporte pas encore ce que la page importe. Le
+> module échoue alors en silence — et un module ES qui échoue ne laisse *rien*
+> à l'écran. Un filet dans la page transforme malgré tout ce cas en message
+> lisible (« recharge avec Ctrl+F5 ») plutôt qu'en page blanche.
+
 ## Limites connues
 
 - Le treillis complet croît comme le produit des hauteurs de hiérarchie.

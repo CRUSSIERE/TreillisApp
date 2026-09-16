@@ -88,6 +88,28 @@
     font: 12.5px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
   }
 </style>
+<script>
+  // Un module ES qui echoue ne laisse aucune trace a l'ecran : la page reste
+  // blanche, sans message. Ce filet attrape le cas et dit quoi faire.
+  // Cause la plus frequente : GitHub Pages sert index.html et lattice.js avec
+  // max-age=600 chacun de son cote, donc un index.html neuf peut tomber sur
+  // un lattice.js encore en cache -- d'ou le ?v= sur l'import, qui evite
+  // normalement d'en arriver la.
+  window.__bootError = null
+  window.addEventListener('error', (e) => {
+    window.__bootError = e.message || (e.error && e.error.message) || null
+  }, true)
+  window.addEventListener('load', () => {
+    const panel = document.getElementById('panel')
+    if (!panel || panel.children.length > 0) return
+    document.getElementById('canvas').innerHTML =
+      '<div class="error"><strong>L\'application n\'a pas pu démarrer.</strong>' +
+      '<br>Recharge en forçant le cache : <kbd>Ctrl</kbd>+<kbd>F5</kbd>' +
+      ' (<kbd>Cmd</kbd>+<kbd>Maj</kbd>+<kbd>R</kbd> sur Mac).' +
+      (window.__bootError ? '<br><small>' + window.__bootError + '</small>' : '') +
+      '</div>'
+  })
+</script>
 </head>
 <body>
 
@@ -126,7 +148,11 @@ import {
   AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
   derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, keyOf, latticeSize,
   labelOf, parseKey, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
-} from './lattice.js'
+  // ?v= : index.html et lattice.js ont chacun leur cache de 10 min sur
+  // GitHub Pages. Sans ce marqueur, une page fraiche peut charger un module
+  // perime, qui n'exporte pas encore ce qu'elle importe -> page blanche.
+  // A INCREMENTER a chaque modification de lattice.js.
+} from './lattice.js?v=2'
 
 /* ------------------------------------------------------------------ */
 /* Etat                                                                */
