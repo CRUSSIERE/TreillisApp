@@ -58,6 +58,10 @@ const SVG_STYLE = `
   .poignee { fill: #fff; stroke: #9aa4b2; stroke-width: 1.4; opacity: .5; cursor: grab; }
   .poignee:hover { opacity: 1; stroke: #2f6fd0; stroke-width: 2; }
   .poignee.plie { opacity: 1; stroke: #2f6fd0; }
+  /* ancre : point d'arrivee de la fleche sur la boite, glissable le long du bord */
+  .ancre { fill: #fff; stroke: #9aa4b2; stroke-width: 1.4; opacity: .5; cursor: ew-resize; rx: 2; }
+  .ancre:hover { opacity: 1; stroke: #2f6fd0; stroke-width: 2; }
+  .ancre.deplacee { opacity: 1; stroke: #2f6fd0; }
 `
 
 const MARKERS = [
@@ -163,6 +167,24 @@ const centre = (b) => b.x + b.w / 2
 
 /** identite d'un lien, stable tant que ses deux extremites existent */
 export const edgeId = (from, to) => `${from}>${to}`
+
+/** Fraction le long du bord de la boite ou la fleche atterrit. 0,5 = au
+ *  milieu, le defaut. Bornee pour que la pointe ne se pose pas pile dans un
+ *  coin, ou elle chevaucherait la bordure. */
+export const ANCRE_MIN = 0.06
+export const ANCRE_MAX = 0.94
+export const ancreX = (boite, u) =>
+  boite.x + Math.min(ANCRE_MAX, Math.max(ANCRE_MIN, u ?? 0.5)) * boite.w
+
+/** Poignee d'arrivee, posee sur le bord de la boite. Comme la poignee de pli,
+ *  c'est une affordance d'edition : rendue hors du contenu mesure. */
+function ancreSvg(id, x, y, boite, deplacee) {
+  return `<rect class="ancre${deplacee ? ' deplacee' : ''}" ` +
+    `data-anchor="${esc(id)}" data-box="${boite.x},${boite.w}" ` +
+    `x="${x - 4}" y="${y - 4}" width="8" height="8">` +
+    `<title>Glisser le long du bord pour déplacer l’arrivée — double-clic pour recentrer</title>` +
+    `</rect>`
+}
 
 /**
  * Trace d'un lien, et position de sa poignee.
@@ -272,16 +294,17 @@ const titre = (t) => (t ? `<title>${esc(t)}</title>` : '')
 
 /** Derivations et roll-up : `from` est toujours le noeud le plus fin, donc le
  *  plus bas -- la fleche monte. */
-function drawEdges(edges, placed, rowBounds, nom, suivreX, suivreY, bends, poignees) {
+function drawEdges(edges, placed, rowBounds, nom, suivreX, suivreY, bends, poignees, anchors) {
   return edges
     .map(({ from, to, deriv, forced }) => {
       const a = placed.get(from)
       const b = placed.get(to)
       if (!a || !b) return ''
       const id = edgeId(from, to)
+      const u = anchors?.[id]
       const x1 = centre(a)
       const y1 = a.y
-      const x2 = centre(b)
+      const x2 = deriv ? ancreX(b, u) : centre(b)
       const y2 = b.y + b.h + (deriv ? 7 : 0)
       const tr = traceLien(id, x1, y1, x2, y2, a.row, b.row, rowBounds, bends)
       suivreX(tr.maxX)
@@ -294,7 +317,9 @@ function drawEdges(edges, placed, rowBounds, nom, suivreX, suivreY, bends, poign
       // n'aiderait personne, on ne les propose que sur les liens du partiel
       return `<path class="${cls}" data-edge="${esc(id)}" data-ends="${x1},${y1},${x2},${y2}" ` +
         `d="${tr.d}"${deriv ? ' marker-end="url(#arrow)"' : ''}>${titre(t)}</path>` +
-        (deriv ? (poignees.push(poigneeSvg(id, tr)), '') : '')
+        (deriv
+          ? (poignees.push(poigneeSvg(id, tr), ancreSvg(id, x2, b.y + b.h, b, u !== undefined)), '')
+          : '')
     })
     .join('')
 }
@@ -302,16 +327,17 @@ function drawEdges(edges, placed, rowBounds, nom, suivreX, suivreY, bends, poign
 /** L'analyse est au-dessus de son agregat : cette fleche-la descend. Rouge
  *  pointille quand `issue` n'est pas vide -- le rattachement impose ne tient
  *  pas, et mieux vaut le montrer que dessiner une fleche qui ment. */
-function drawAnalyses(analyses, placed, rowBounds, nom, suivreX, suivreY, bends, poignees) {
+function drawAnalyses(analyses, placed, rowBounds, nom, suivreX, suivreY, bends, poignees, anchors) {
   return analyses
     .map((an) => {
       const from = placed.get(an.key)
       const to = placed.get(an.target)
       if (!from || !to) return ''
       const id = edgeId(an.key, an.target)
+      const u = anchors?.[id]
       const x1 = centre(from)
       const y1 = from.y + from.h
-      const x2 = centre(to)
+      const x2 = ancreX(to, u)
       const y2 = to.y - 7
       const tr = traceLien(id, x1, y1, x2, y2, from.row, to.row, rowBounds, bends)
       const { d } = tr
@@ -324,7 +350,7 @@ function drawAnalyses(analyses, placed, rowBounds, nom, suivreX, suivreY, bends,
       return `<path class="edge analysis${invalide ? ' invalide' : ''}" data-edge="${esc(id)}" ` +
         `data-ends="${x1},${y1},${x2},${y2}" d="${d}" ` +
         `marker-end="url(#${invalide ? 'arrow-invalide' : 'arrow-analyse'})">${titre(t)}</path>` +
-        (poignees.push(poigneeSvg(id, tr)), '')
+        (poignees.push(poigneeSvg(id, tr), ancreSvg(id, x2, to.y, to, u !== undefined)), '')
     })
     .join('')
 }
@@ -332,7 +358,7 @@ function drawAnalyses(analyses, placed, rowBounds, nom, suivreX, suivreY, bends,
 /** Fleches libres : aucune semantique de treillis, elles relient ce que
  *  l'utilisateur veut. Violet, pour ne se confondre ni avec les derivations
  *  (bleu) ni avec les rattachements d'analyse (sombre). */
-function drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY, bends, poignees) {
+function drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY, bends, poignees, anchors) {
   return freeArrows
     .map((f) => {
       const a = placed.get(f.from)
@@ -343,6 +369,7 @@ function drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY, bends, 
       let etiq
       let tr = null // pas de poignee sur l'arc de meme rangee : il est deja
       let bouts = '' // contraint a passer par-dessus, l'inflechir n'aiderait pas
+      let bord = null
 
       if (a.row === b.row) {
         // meme rangee : passer par le dessus. Tout droit, le trait traverserait
@@ -355,12 +382,15 @@ function drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY, bends, 
         const monte = a.y > b.y
         const y1 = monte ? a.y : a.y + a.h
         const y2 = monte ? b.y + b.h + 7 : b.y - 7
-        tr = traceLien(id, centre(a), y1, centre(b), y2, a.row, b.row, rowBounds, bends)
+        const u = anchors?.[id]
+        const x2 = ancreX(b, u)
+        bord = { x: x2, y: monte ? b.y + b.h : b.y, boite: b, deplacee: u !== undefined }
+        tr = traceLien(id, centre(a), y1, x2, y2, a.row, b.row, rowBounds, bends)
         d = tr.d
         suivreX(tr.maxX)
         suivreY(tr.minY)
         etiq = { x: (centre(a) + centre(b)) / 2 + 8, y: (a.y + b.y) / 2 + NODE_H / 2, milieu: false }
-        bouts = `${centre(a)},${y1},${centre(b)},${y2}`
+        bouts = `${centre(a)},${y1},${x2},${y2}`
       }
 
       const texte = f.label
@@ -369,7 +399,9 @@ function drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY, bends, 
       return `<path class="edge libre"${bouts ? ` data-edge="${esc(id)}" data-ends="${bouts}"` : ''} ` +
         `d="${d}" marker-end="url(#arrow-libre)">` +
         `${titre(f.label || 'flèche libre')}</path>${texte}` +
-        (tr ? (poignees.push(poigneeSvg(id, tr)), '') : '')
+        (tr
+          ? (poignees.push(poigneeSvg(id, tr), ancreSvg(id, bord.x, bord.y, bord.boite, bord.deplacee)), '')
+          : '')
     })
     .join('')
 }
@@ -418,7 +450,7 @@ function drawBoxes(placed, base, materialized, nom) {
  */
 export function diagramSvg({
   items, analyses, edges, freeArrows, names, base, materialized,
-  bends = {}, label = 'Treillis d’agrégats',
+  bends = {}, anchors = {}, label = 'Treillis d’agrégats',
 }) {
   const { placed, width, height, rowBounds } = layout(items, analyses)
   const nom = (k) => names.get(k) ?? k
@@ -432,9 +464,9 @@ export function diagramSvg({
 
   const bandes = drawBands(rowBounds, analyses.length > 0)
   const poignees = []
-  const edgeSvg = drawEdges(edges, placed, rowBounds, nom, suivreX, suivreY, bends, poignees)
-  const analysisSvg = drawAnalyses(analyses, placed, rowBounds, nom, suivreX, suivreY, bends, poignees)
-  const freeSvg = drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY, bends, poignees)
+  const edgeSvg = drawEdges(edges, placed, rowBounds, nom, suivreX, suivreY, bends, poignees, anchors)
+  const analysisSvg = drawAnalyses(analyses, placed, rowBounds, nom, suivreX, suivreY, bends, poignees, anchors)
+  const freeSvg = drawFreeArrows(freeArrows, placed, rowBounds, suivreX, suivreY, bends, poignees, anchors)
   const boxSvg = drawBoxes(placed, base, materialized, nom)
 
   // on deplace l'origine du viewBox plutot que de deplacer tout le contenu

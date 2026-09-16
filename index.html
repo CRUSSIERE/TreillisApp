@@ -163,7 +163,7 @@
  *
  *   >>> INCREMENTER A CHAQUE MODIFICATION D'UN MODULE <<<
  */
-const V = '14'
+const V = '15'
 
 const [modLattice, modRender, modFiles] = await Promise.all([
   import(`./lattice.js?v=${V}`),
@@ -200,6 +200,7 @@ const EXEMPLE_COURS = () => ({
   analyses: [],
   freeArrows: [], // tracees a la main, sans rapport avec l'ordre du treillis
   edgeBends: {}, // lien -> ecart de sa poignee au milieu du segment
+  edgeAnchors: {}, // lien -> fraction ou sa fleche atterrit sur la boite
   mode: 'complete',
 })
 
@@ -616,6 +617,7 @@ function renderCanvas() {
   const total = lattice.nodes.length
   host.innerHTML = diagramSvg({
     bends: state.edgeBends,
+    anchors: state.edgeAnchors,
     label: partial
       ? `Treillis partiel : ${mats.size} agrégats, ${analyses.length} analyses`
       : `Treillis complet : ${total} nœuds`,
@@ -880,12 +882,65 @@ $('#canvas').addEventListener('pointerdown', (e) => {
   main.addEventListener('pointercancel', finir)
 })
 
+/**
+ * Glisser l'ancre deplace le POINT D'ARRIVEE le long du bord de la boite ;
+ * la fleche y reste accrochee. C'est ce qui separe plusieurs fleches qui
+ * atterrissent au meme endroit.
+ *
+ * Seule l'abscisse bouge : l'ordonnee est celle du bord, et la contrainte a
+ * une dimension evite qu'une pointe se retrouve au milieu d'une boite.
+ */
+$('#canvas').addEventListener('pointerdown', (e) => {
+  const ancre = e.target.closest('[data-anchor]')
+  if (!ancre) return
+  e.preventDefault()
+
+  const svg = $('#svg')
+  const id = ancre.dataset.anchor
+  const [bx, bw] = ancre.dataset.box.split(',').map(Number)
+  const trait = svg.querySelector(`[data-edge="${CSS.escape(id)}"]`)
+  let u = null
+
+  ancre.setPointerCapture(e.pointerId)
+
+  const bouger = (ev) => {
+    const p = pointSvg(svg, ev)
+    u = Math.min(0.94, Math.max(0.06, (p.x - bx) / bw))
+    const nx = bx + u * bw
+    // le dernier couple de coordonnees est l'arrivee, quel que soit le type
+    // de trace (L, C ou Q) : on ne remplace que son abscisse
+    trait.setAttribute('d', trait.getAttribute('d').replace(/[\d.-]+,([\d.-]+)$/, `${nx},$1`))
+    ancre.setAttribute('x', nx - 4)
+    ancre.classList.add('deplacee')
+  }
+
+  const finir = () => {
+    ancre.removeEventListener('pointermove', bouger)
+    ancre.removeEventListener('pointerup', finir)
+    ancre.removeEventListener('pointercancel', finir)
+    if (u !== null) {
+      state.edgeAnchors[id] = u
+      renderCanvas()
+    }
+  }
+
+  ancre.addEventListener('pointermove', bouger)
+  ancre.addEventListener('pointerup', finir)
+  ancre.addEventListener('pointercancel', finir)
+})
+
 /* double-clic : le lien retrouve son trace automatique */
 $('#canvas').addEventListener('dblclick', (e) => {
   const main = e.target.closest('[data-bend]')
-  if (!main || !state.edgeBends[main.dataset.bend]) return
-  delete state.edgeBends[main.dataset.bend]
-  renderCanvas()
+  if (main && state.edgeBends[main.dataset.bend]) {
+    delete state.edgeBends[main.dataset.bend]
+    return renderCanvas()
+  }
+  const ancre = e.target.closest('[data-anchor]')
+  if (ancre && state.edgeAnchors[ancre.dataset.anchor] !== undefined) {
+    delete state.edgeAnchors[ancre.dataset.anchor]
+    renderCanvas()
+  }
 })
 
 /* Selection des noeuds a materialiser -- souris et clavier */

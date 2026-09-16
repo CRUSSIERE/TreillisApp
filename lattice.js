@@ -377,14 +377,16 @@ export function pruneSelection(selection, dimensions) {
 
   // un pli designe un lien par ses deux extremites : si l'une disparait, le
   // lien n'est plus trace et le pli n'a plus d'objet
-  const edgeBends = Object.fromEntries(
-    Object.entries(selection.edgeBends ?? {}).filter(([id]) => {
-      const [de, vers] = id.split('>')
-      return ancres.has(de) && ancres.has(vers)
-    }),
+  const lienVivant = ([id]) => {
+    const [de, vers] = id.split('>')
+    return ancres.has(de) && ancres.has(vers)
+  }
+  const edgeBends = Object.fromEntries(Object.entries(selection.edgeBends ?? {}).filter(lienVivant))
+  const edgeAnchors = Object.fromEntries(
+    Object.entries(selection.edgeAnchors ?? {}).filter(lienVivant),
   )
 
-  return { materialized, sources, analyses, freeArrows, edgeBends }
+  return { materialized, sources, analyses, freeArrows, edgeBends, edgeAnchors }
 }
 
 /** Ce qu'une selection contient de choix explicites -- ce qu'on perdrait a
@@ -423,6 +425,7 @@ export function toOwnFormat(state) {
     ...(state.analyses?.length ? { analyses: state.analyses } : {}),
     ...(state.freeArrows?.length ? { freeArrows: state.freeArrows } : {}),
     ...(Object.keys(state.edgeBends ?? {}).length ? { edgeBends: state.edgeBends } : {}),
+    ...(Object.keys(state.edgeAnchors ?? {}).length ? { edgeAnchors: state.edgeAnchors } : {}),
     mode: state.mode,
   }
 }
@@ -506,6 +509,10 @@ export function fromOwnFormat(json) {
       Object.entries(json.edgeBends ?? {}).filter(
         ([, v]) => v && Number.isFinite(v.dx) && Number.isFinite(v.dy),
       ),
+    ),
+    // point d'arrivee sur la boite, en fraction de sa largeur
+    edgeAnchors: Object.fromEntries(
+      Object.entries(json.edgeAnchors ?? {}).filter(([, u]) => Number.isFinite(u)),
     ),
     mode: json.mode === 'partial' ? 'partial' : 'complete',
   }

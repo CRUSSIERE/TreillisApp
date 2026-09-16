@@ -31,7 +31,7 @@ import {
   toOwnFormat,
   toSql,
 } from './lattice.js'
-import { diagramSvg, edgeId, layout, linkPath, nodeWidth } from './render.js'
+import { ANCRE_MAX, ANCRE_MIN, ancreX, diagramSvg, edgeId, layout, linkPath, nodeWidth } from './render.js'
 
 let passed = 0
 function check(name, fn) {
@@ -598,6 +598,56 @@ check('pli -- il traverse l’aller-retour JSON', () => {
   }
   const relu = fromOwnFormat(JSON.parse(JSON.stringify(toOwnFormat(avec))))
   assert.deepEqual(relu.edgeBends, { [edgeId(BASE, AGG1)]: { dx: -12.5, dy: 30 } })
+})
+
+/* --- point d'arrivee des fleches ---------------------------------------- */
+
+check('ancre -- la fraction est bornee, la pointe ne tombe pas dans un coin', () => {
+  const boite = { x: 100, w: 200 }
+  assert.equal(ancreX(boite, 0.5), 200, 'par defaut, au milieu')
+  assert.equal(ancreX(boite, undefined), 200)
+  assert.equal(ancreX(boite, -5), 100 + ANCRE_MIN * 200, 'borne basse')
+  assert.equal(ancreX(boite, 99), 100 + ANCRE_MAX * 200, 'borne haute')
+})
+
+check('ancre -- deplacer l’arrivee ne bouge ni le depart ni le bord', () => {
+  const m = modele()
+  const id = edgeId('0,0', '0,1')
+  const trace = (svg) => svg.match(/<path class="edge deriv"[\s\S]*?\sd="([^"]+)"/)[1]
+  const bouts = (d) => ({
+    depart: d.match(/^M([\d.-]+),([\d.-]+)/).slice(1).map(Number),
+    arrivee: d.match(/([\d.-]+),([\d.-]+)$/).slice(1).map(Number),
+  })
+  const a = bouts(trace(diagramSvg(m)))
+  const b = bouts(trace(diagramSvg({ ...m, anchors: { [id]: 0.1 } })))
+
+  assert.deepEqual(b.depart, a.depart, 'le lien reste accroche a sa source')
+  assert.notEqual(b.arrivee[0], a.arrivee[0], 'l’arrivee glisse le long du bord')
+  assert.equal(b.arrivee[1], a.arrivee[1], 'mais reste sur le bord : meme ordonnee')
+})
+
+check('ancre -- sa poignee reste hors du contenu mesure', () => {
+  const svg = diagramSvg(modele())
+  const contenu = svg.slice(svg.indexOf('data-export="content"'), svg.indexOf('data-export="chrome"'))
+  assert.ok(!contenu.includes('class="ancre'), 'sinon elle gonflerait le recadrage')
+  assert.match(svg.slice(svg.indexOf('data-export="chrome"')), /class="ancre/)
+})
+
+check('ancre -- elle survit au JSON et disparait avec son lien', () => {
+  const id = edgeId(BASE, AGG1)
+  const avec = {
+    factName: 'VENTES', measures: mesures,
+    dimensions: p35.map((d) => ({ ...d, hierarchies: [] })),
+    materialized: [AGG1], sources: {}, analyses: [], freeArrows: [], edgeBends: {},
+    edgeAnchors: { [id]: 0.2, [edgeId(BASE, AGG2)]: 0.8 },
+    mode: 'partial',
+  }
+  const relu = fromOwnFormat(JSON.parse(JSON.stringify(toOwnFormat(avec))))
+  assert.equal(relu.edgeAnchors[id], 0.2)
+
+  // Agg2 n'est pas materialise : son lien n'existe pas, son ancre non plus
+  const elague = pruneSelection(avec, p35)
+  assert.deepEqual(Object.keys(elague.edgeAnchors), [id])
 })
 
 /* --- trace des liens --------------------------------------------------- */

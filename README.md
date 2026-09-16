@@ -83,12 +83,26 @@ c'est une colonne de plus, pas un axe : il ne change pas quel agrégat répond.
 Il ne vaut qu'**au niveau dont il dépend** : remonter CLIENTS de `codeC` à
 `ville` retire `nom` des analyses concernées, puisqu'il n'a plus de sens.
 
+### Déplacer l'arrivée d'une flèche
+
+Chaque flèche porte un petit **carré** posé sur le bord de sa boîte d'arrivée.
+Le glisser fait coulisser le point d'atterrissage **le long de ce bord** : la
+flèche reste accrochée, seul l'endroit où elle se pose change. **Double-clic**
+pour la recentrer.
+
+C'est le remède aux arrivées superposées : quand plusieurs flèches se posent au
+même point d'une boîte, on les étale sur sa largeur. Le déplacement est
+contraint à une dimension — l'ordonnée reste celle du bord — pour qu'une pointe
+ne puisse pas se retrouver au milieu d'une boîte.
+
+L'ancre est mémorisée en **fraction de la largeur** de la boîte, donc elle
+tient quand un libellé rallonge la boîte.
+
 ### Infléchir un lien
 
-Chaque lien — dérivation, rattachement d'analyse, flèche libre — porte une
-petite **poignée** en son milieu. La glisser infléchit le tracé ; ses deux
-extrémités restent accrochées à leurs boîtes. **Double-clic** pour rétablir le
-tracé automatique.
+Chaque lien porte aussi une petite **poignée ronde** en son milieu. La glisser
+infléchit le tracé ; ses deux extrémités restent accrochées. **Double-clic**
+pour rétablir le tracé automatique.
 
 C'est fait pour les croisements gênants : sur un treillis un peu fourni, deux
 flèches peuvent se superposer ou passer derrière une boîte, et rien dans le
@@ -96,8 +110,8 @@ placement automatique ne le résout. Le pli est mémorisé en **écart au milieu
 du segment**, pas en position absolue : il suit donc les boîtes quand la
 disposition change.
 
-Les poignées sont une affordance d'édition : elles sont dessinées hors du
-contenu mesuré et **n'apparaissent pas dans l'image exportée**.
+Poignées et ancres sont des affordances d'édition : elles sont dessinées hors
+du contenu mesuré et **n'apparaissent pas dans l'image exportée**.
 
 ### Flèches libres
 
@@ -300,6 +314,9 @@ par **Importer JSON** (sélection des agrégats comprise) :
   "edgeBends": {            // facultatif : liens infléchis à la main.
     "0,0>0,1": { "dx": -40, "dy": 15 }   // écart de la poignée au milieu
   },
+  "edgeAnchors": {          // facultatif : point d'arrivée sur la boîte,
+    "0,0>0,1": 0.2          // en fraction de sa largeur (0,5 = centré)
+  },
   "mode": "complete"        // complete | partial
 }
 ```
@@ -354,7 +371,7 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-66 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+70 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
 SQL de la p.62, la décomposition des moyennes, l'échappement des identifiants,
 les attributs faibles, l'élagage de la sélection, le tracé des liens qui
