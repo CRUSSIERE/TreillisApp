@@ -332,7 +332,7 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-56 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+57 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
 SQL de la p.62, la décomposition des moyennes, l'échappement des identifiants,
 les attributs faibles, l'élagage de la sélection, le tracé des liens qui
@@ -347,14 +347,18 @@ Pas de build, pas de workflow : les fichiers sont servis tels quels.
 2. *Settings → Pages → Build and deployment → Source : **Deploy from a
    branch**, branche `main`, dossier `/ (root)`*.
 
-> **À chaque modification de `lattice.js`, incrémenter le `?v=` de son import
-> dans `index.html`.** GitHub Pages sert les deux fichiers avec
-> `Cache-Control: max-age=600`, mis en cache chacun de son côté : sans ce
-> marqueur, un visiteur peut récupérer un `index.html` neuf et garder un
-> `lattice.js` périmé, qui n'exporte pas encore ce que la page importe. Le
-> module échoue alors en silence — et un module ES qui échoue ne laisse *rien*
-> à l'écran. Un filet dans la page transforme malgré tout ce cas en message
-> lisible (« recharge avec Ctrl+F5 ») plutôt qu'en page blanche.
+> **À chaque modification d'un module, incrémenter la constante `V` en tête du
+> script de `index.html`.** GitHub Pages sert la page et chaque module avec
+> `Cache-Control: max-age=600`, mis en cache séparément : sans marqueur de
+> version, un visiteur peut récupérer un `index.html` neuf et garder un module
+> périmé, qui n'exporte pas encore ce que la page importe. L'import échoue
+> alors — et un module ES qui échoue ne laisse *rien* à l'écran.
+>
+> `V` est unique et les trois modules sont chargés par import dynamique, pour
+> qu'il n'y ait qu'**un** endroit à incrémenter : avec trois littéraux, on en
+> oublie. `node verify.mjs` refuse d'ailleurs toute version écrite en dur.
+> Enfin, un filet dans la page transforme un démarrage raté en message lisible
+> (« recharge avec Ctrl+F5 ») plutôt qu'en page blanche.
 
 ## Limites connues
 

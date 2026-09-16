@@ -6,6 +6,7 @@
  * p.34 (treillis complet) et p.35 / p.61-62 (treillis partiel + vues).
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   MAX_NODES,
   aggregateNames,
@@ -644,6 +645,30 @@ check('import OLAP -- les hierarchies alternatives restent proposables', () => {
 
 check('import OLAP -- un fichier etranger est refuse avec un message clair', () => {
   assert.throws(() => fromOlapSchema({ hello: 'world' }), /n’est pas un schema OLAP/)
+})
+
+/* --- garde-fou de deploiement ------------------------------------------- */
+
+check('cache -- un seul numero de version, partage par tous les modules', () => {
+  // GitHub Pages met index.html et chaque module en cache separement : un
+  // module perime fait echouer l'import, et un module ES qui echoue ne laisse
+  // rien a l'ecran. Trois litteraux a incrementer -> on en oublie (vecu).
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8')
+  assert.deepEqual(
+    html.match(/\.js\?v=\d+/g) ?? [],
+    [],
+    'aucune version en dur : toutes doivent deriver de la constante V',
+  )
+  assert.equal(
+    (html.match(/^const V = '\d+'$/gm) ?? []).length,
+    1,
+    'exactement un endroit a incrementer',
+  )
+  assert.equal(
+    (html.match(/\.js\?v=\$\{V\}/g) ?? []).length,
+    3,
+    'les trois modules passent par V',
+  )
 })
 
 console.log(`\n${passed} controles passes.`)

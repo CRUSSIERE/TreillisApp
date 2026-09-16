@@ -149,18 +149,36 @@
 </main>
 
 <script type="module">
-import {
-  AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
-  derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, keyOf, latticeSize,
-  analysisIssue, availableWeak, displayLabel, parseKey, pruneSelection,
-  selectionSize, sortKeys, toOwnFormat, toSql, validSources, analysisSource,
-  // ?v= : index.html et lattice.js ont chacun leur cache de 10 min sur
-  // GitHub Pages. Sans ce marqueur, une page fraiche peut charger un module
-  // perime, qui n'exporte pas encore ce qu'elle importe -> page blanche.
-  // A INCREMENTER a chaque modification de lattice.js.
-} from './lattice.js?v=9'
-import { diagramSvg, esc } from './render.js?v=1'
-import { downloadJson, exportImage } from './files.js?v=1'
+/**
+ * Un seul numero de version pour tous les modules.
+ *
+ * GitHub Pages sert index.html et chaque module avec max-age=600, mis en cache
+ * separement : une page fraiche peut charger un module perime, qui n'exporte
+ * pas encore ce qu'elle importe -- et un module ES qui echoue ne laisse RIEN a
+ * l'ecran. Le `?v=` donne au module une URL distincte et court-circuite le
+ * cache.
+ *
+ * Import dynamique et non statique, justement pour n'avoir qu'UN endroit a
+ * incrementer : avec trois litteraux, on en oublie (c'est arrive).
+ *
+ *   >>> INCREMENTER A CHAQUE MODIFICATION D'UN MODULE <<<
+ */
+const V = '11'
+
+const [modLattice, modRender, modFiles] = await Promise.all([
+  import(`./lattice.js?v=${V}`),
+  import(`./render.js?v=${V}`),
+  import(`./files.js?v=${V}`),
+])
+
+const {
+  AGGREGATIONS, ALL, MAX_NODES, aggregateNames, analysisIssue, analysisSource,
+  availableWeak, baseKey, buildLattice, derivations, displayLabel, fromOlapSchema,
+  fromOwnFormat, isOlapSchema, keyOf, latticeSize, parseKey, pruneSelection,
+  selectionSize, sortKeys, toOwnFormat, toSql, validSources,
+} = modLattice
+const { diagramSvg, esc } = modRender
+const { downloadJson, exportImage } = modFiles
 
 /* ------------------------------------------------------------------ */
 /* Etat                                                                */
