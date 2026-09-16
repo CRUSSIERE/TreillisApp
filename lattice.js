@@ -510,9 +510,20 @@ export function fromOwnFormat(json) {
         ([, v]) => v && Number.isFinite(v.dx) && Number.isFinite(v.dy),
       ),
     ),
-    // point d'arrivee sur la boite, en fraction de sa largeur
+    // ou la fleche se pose sur chaque boite, en fraction de leur largeur.
+    // Un nombre nu est l'ancien format, ou seule l'arrivee etait reglable.
     edgeAnchors: Object.fromEntries(
-      Object.entries(json.edgeAnchors ?? {}).filter(([, u]) => Number.isFinite(u)),
+      Object.entries(json.edgeAnchors ?? {})
+        .map(([id, v]) => {
+          if (Number.isFinite(v)) return [id, { to: v }]
+          if (!v || typeof v !== 'object') return null
+          const bouts = {}
+          for (const bout of ['from', 'to']) {
+            if (Number.isFinite(v[bout])) bouts[bout] = v[bout]
+          }
+          return Object.keys(bouts).length ? [id, bouts] : null
+        })
+        .filter(Boolean),
     ),
     mode: json.mode === 'partial' ? 'partial' : 'complete',
   }

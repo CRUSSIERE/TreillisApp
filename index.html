@@ -163,7 +163,7 @@
  *
  *   >>> INCREMENTER A CHAQUE MODIFICATION D'UN MODULE <<<
  */
-const V = '15'
+const V = '16'
 
 const [modLattice, modRender, modFiles] = await Promise.all([
   import(`./lattice.js?v=${V}`),
@@ -200,11 +200,37 @@ const EXEMPLE_COURS = () => ({
   analyses: [],
   freeArrows: [], // tracees a la main, sans rapport avec l'ordre du treillis
   edgeBends: {}, // lien -> ecart de sa poignee au milieu du segment
-  edgeAnchors: {}, // lien -> fraction ou sa fleche atterrit sur la boite
+  edgeAnchors: {}, // lien -> { from, to } : ou la fleche se pose sur chaque boite
   mode: 'complete',
 })
 
 let state = EXEMPLE_COURS()
+
+/** Ce que l'utilisateur regarde : { kind: 'edge'|'node', id }. Hors de
+ *  `state`, car ni l'export ni l'annulation n'ont a s'en soucier. */
+let selection = null
+
+/** Annulation : une pile d'instantanes du format de travail. Pas de
+ *  redo -- non demande, et chaque etat en plus est un etat a maintenir. */
+const historique = []
+let pressePapier = null
+
+function snapshot() {
+  const actuel = JSON.stringify(toOwnFormat(state))
+  // deux instantanes identiques n'apportent rien : un focus sans frappe, un
+  // clic sans effet, et la pile se remplirait de doublons
+  if (historique[historique.length - 1] === actuel) return
+  historique.push(actuel)
+  if (historique.length > 60) historique.shift()
+}
+
+function annuler() {
+  const precedent = historique.pop()
+  if (precedent === undefined) return
+  state = fromOwnFormat(JSON.parse(precedent))
+  selection = null
+  render()
+}
 
 const $ = (sel) => document.querySelector(sel)
 /** dimensions retenues pour le treillis : une dimension sans niveau n'est pas
@@ -618,6 +644,7 @@ function renderCanvas() {
   host.innerHTML = diagramSvg({
     bends: state.edgeBends,
     anchors: state.edgeAnchors,
+    selection,
     label: partial
       ? `Treillis partiel : ${mats.size} agrégats, ${analyses.length} analyses`
       : `Treillis complet : ${total} nœuds`,
@@ -653,6 +680,7 @@ function render() {
 $('#panel').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-act]')
   if (!btn) return
+  snapshot()
   const d = Number(btn.dataset.d)
   const l = Number(btn.dataset.l)
   const m = Number(btn.dataset.m)
@@ -741,6 +769,12 @@ $('#panel').addEventListener('click', (e) => {
   render()
 })
 
+// une session de frappe = un seul pas d'annulation : on photographie a
+// l'entree dans le champ, pas a chaque caractere
+$('#panel').addEventListener('focusin', (e) => {
+  if (e.target.matches('input[type=text]')) snapshot()
+})
+
 // Frappe au clavier : seul le dessin est refait. Redessiner le panneau
 // arracherait le focus du champ en cours de saisie a chaque caractere.
 $('#panel').addEventListener('input', (e) => {
@@ -767,6 +801,7 @@ $('#panel').addEventListener('input', (e) => {
 })
 
 $('#panel').addEventListener('change', (e) => {
+  snapshot()
   const el = e.target
   if (el.dataset.field === 'weak') {
     render()
@@ -872,6 +907,7 @@ $('#canvas').addEventListener('pointerdown', (e) => {
     main.removeEventListener('pointerup', finir)
     main.removeEventListener('pointercancel', finir)
     if (ecart) {
+      snapshot()
       state.edgeBends[id] = ecart
       renderCanvas() // le cadre peut avoir a s'elargir
     }
@@ -897,6 +933,7 @@ $('#canvas').addEventListener('pointerdown', (e) => {
 
   const svg = $('#svg')
   const id = ancre.dataset.anchor
+  const bout = ancre.dataset.end // 'from' ou 'to'
   const [bx, bw] = ancre.dataset.box.split(',').map(Number)
   const trait = svg.querySelector(`[data-edge="${CSS.escape(id)}"]`)
   let u = null
@@ -907,9 +944,16 @@ $('#canvas').addEventListener('pointerdown', (e) => {
     const p = pointSvg(svg, ev)
     u = Math.min(0.94, Math.max(0.06, (p.x - bx) / bw))
     const nx = bx + u * bw
-    // le dernier couple de coordonnees est l'arrivee, quel que soit le type
-    // de trace (L, C ou Q) : on ne remplace que son abscisse
-    trait.setAttribute('d', trait.getAttribute('d').replace(/[\d.-]+,([\d.-]+)$/, `${nx},$1`))
+    // on ne remplace que l'abscisse du bout concerne : le premier couple pour
+    // le depart, le dernier pour l'arrivee. Vrai quel que soit le type de
+    // trace -- segment, contournement cubique ou pli quadratique.
+    const d = trait.getAttribute('d')
+    trait.setAttribute(
+      'd',
+      bout === 'from'
+        ? d.replace(/^M[\d.-]+,([\d.-]+)/, `M${nx},$1`)
+        : d.replace(/[\d.-]+,([\d.-]+)$/, `${nx},$1`),
+    )
     ancre.setAttribute('x', nx - 4)
     ancre.classList.add('deplacee')
   }
@@ -919,7 +963,8 @@ $('#canvas').addEventListener('pointerdown', (e) => {
     ancre.removeEventListener('pointerup', finir)
     ancre.removeEventListener('pointercancel', finir)
     if (u !== null) {
-      state.edgeAnchors[id] = u
+      snapshot()
+      state.edgeAnchors[id] = { ...(state.edgeAnchors[id] ?? {}), [bout]: u }
       renderCanvas()
     }
   }
@@ -933,39 +978,139 @@ $('#canvas').addEventListener('pointerdown', (e) => {
 $('#canvas').addEventListener('dblclick', (e) => {
   const main = e.target.closest('[data-bend]')
   if (main && state.edgeBends[main.dataset.bend]) {
+    snapshot()
     delete state.edgeBends[main.dataset.bend]
     return renderCanvas()
   }
   const ancre = e.target.closest('[data-anchor]')
-  if (ancre && state.edgeAnchors[ancre.dataset.anchor] !== undefined) {
-    delete state.edgeAnchors[ancre.dataset.anchor]
+  const pose = ancre && state.edgeAnchors[ancre.dataset.anchor]
+  if (pose && pose[ancre.dataset.end] !== undefined) {
+    snapshot()
+    delete pose[ancre.dataset.end]
+    if (!Object.keys(pose).length) delete state.edgeAnchors[ancre.dataset.anchor]
     renderCanvas()
   }
 })
 
-/* Selection des noeuds a materialiser -- souris et clavier */
+/**
+ * Clic sur le canvas.
+ *
+ * Un clic n'enleve JAMAIS rien : sur un noeud pas encore materialise il
+ * l'ajoute, sur un noeud deja retenu il se contente de le designer. On retire
+ * un agregat par la croix du panneau, jamais par megarde.
+ *
+ * Un clic sur un lien le designe : c'est ce qui fait apparaitre ses poignees.
+ * Un clic dans le vide deselectionne.
+ */
+$('#canvas').addEventListener('click', (e) => {
+  if (e.target.closest('[data-bend], [data-anchor]')) return // gere par le glisser
+
+  const lien = e.target.closest('[data-edge-hit], [data-edge]')
+  if (lien) {
+    selection = { kind: 'edge', id: lien.dataset.edgeHit ?? lien.dataset.edge }
+    return renderCanvas()
+  }
+
+  const boite = e.target.closest('[data-key]')
+  if (!boite) {
+    if (selection) {
+      selection = null
+      renderCanvas()
+    }
+    return
+  }
+  choisirNoeud(boite.dataset.key)
+})
+
 $('#canvas').addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return
   const g = e.target.closest('[data-key][tabindex]')
   if (!g) return
   e.preventDefault() // sinon l'espace fait defiler le canvas
-  basculeNoeud(g.dataset.key)
+  choisirNoeud(g.dataset.key)
 })
 
-$('#canvas').addEventListener('click', (e) => {
-  const g = e.target.closest('[data-key]')
-  if (g) basculeNoeud(g.dataset.key)
-})
-
-function basculeNoeud(key) {
-  if (key.startsWith('A:')) return // une analyse n'est pas un noeud du treillis
+function choisirNoeud(key) {
+  if (key.startsWith('A:')) {
+    selection = { kind: 'node', id: key }
+    return renderCanvas()
+  }
   if (key === baseKey(axes())) return // la table de faits n'est pas optionnelle
 
-  const i = state.materialized.indexOf(key)
-  if (i >= 0) state.materialized.splice(i, 1)
-  else state.materialized.push(key)
-  render() // le panneau des agregats doit suivre le clic
+  selection = { kind: 'node', id: key }
+  if (!state.materialized.includes(key)) {
+    snapshot()
+    state.materialized.push(key)
+    return render() // le panneau des agregats doit suivre
+  }
+  renderCanvas() // deja materialise : on designe, on n'enleve pas
 }
+
+/* ------------------------------------------------------------------ */
+/* Raccourcis clavier                                                  */
+/* ------------------------------------------------------------------ */
+
+/** Nom libre pour une copie : "A1" donne "A2" si A2 existe deja, etc. */
+function nomLibre(base, pris) {
+  if (!pris.has(base)) return base
+  const racine = base.replace(/\d+$/, '')
+  for (let i = 2; ; i++) {
+    const essai = `${racine}${i}`
+    if (!pris.has(essai)) return essai
+  }
+}
+
+/**
+ * Ctrl+Z annule, Ctrl+C / Ctrl+V dupliquent l'element designe.
+ *
+ * Seuls une analyse et une fleche libre se dupliquent utilement : un agregat
+ * EST son tuple de niveaux, deux exemplaires seraient le meme noeud.
+ */
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey && !e.metaKey) return
+  // ne pas voler le copier-coller de texte a un champ de saisie. `document`
+  // n'est pas un Element et n'a pas matches() : sans ce garde-fou, la touche
+  // levait une exception des que la cible n'etait pas un noeud du document.
+  const saisie = e.target instanceof Element && e.target.matches('input, textarea, select')
+  const touche = e.key.toLowerCase()
+
+  if (touche === 'z' && !saisie) {
+    e.preventDefault()
+    return annuler()
+  }
+
+  if (touche === 'c' && !saisie && selection) {
+    if (selection.kind === 'node' && selection.id.startsWith('A:')) {
+      const a = state.analyses.find((x) => `A:${x.id}` === selection.id)
+      if (a) pressePapier = { genre: 'analyse', data: JSON.parse(JSON.stringify(a)) }
+    } else if (selection.kind === 'edge') {
+      const f = state.freeArrows.find((x) => `${x.from}>${x.to}` === selection.id)
+      if (f) pressePapier = { genre: 'fleche', data: { ...f } }
+    }
+    if (pressePapier) e.preventDefault()
+    return
+  }
+
+  if (touche === 'v' && !saisie && pressePapier) {
+    e.preventDefault()
+    snapshot()
+    if (pressePapier.genre === 'analyse') {
+      const pris = new Set(state.analyses.map((x) => x.name))
+      state.analyses.push({
+        ...pressePapier.data,
+        id: `an${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
+        name: nomLibre(pressePapier.data.name, pris),
+      })
+    } else {
+      // une fleche libre est identifiee par ses deux bouts : un doublon exact
+      // serait invisible, on ne colle donc que si la paire n'existe pas deja
+      const { from, to } = pressePapier.data
+      if (state.freeArrows.some((x) => x.from === from && x.to === to)) return render()
+      state.freeArrows.push({ ...pressePapier.data })
+    }
+    render()
+  }
+})
 
 /* ------------------------------------------------------------------ */
 /* Modes                                                               */

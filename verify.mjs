@@ -534,6 +534,33 @@ check('bandes -- les libelles tiennent dans le cadre, et sortent a l’export', 
 /** abscisse/ordonnee d'une quadratique, pour verifier ou passe la courbe */
 const quad = (t, a, c, b) => (1 - t) ** 2 * a + 2 * (1 - t) * t * c + t ** 2 * b
 
+check('affordances -- rien ne s’affiche tant qu’aucun lien n’est choisi', () => {
+  const m = modele()
+  const muet = diagramSvg(m)
+  assert.ok(!muet.includes('class="poignee'), 'pas de rond avant selection')
+  assert.ok(!muet.includes('class="ancre'), 'pas de carres avant selection')
+  assert.match(muet, /class="zone"/, 'la bande de clic, elle, est toujours la')
+
+  const vu = diagramSvg({ ...m, selection: { kind: 'edge', id: edgeId('0,0', '0,1') } })
+  assert.equal((vu.match(/class="ancre/g) ?? []).length, 2, 'un carre a chaque bout')
+  assert.equal((vu.match(/class="poignee/g) ?? []).length, 1, 'un rond au milieu')
+  assert.match(vu, /class="edge deriv choisi"/, 'et le lien choisi s’epaissit')
+})
+
+check('ancre -- le depart se deplace comme l’arrivee', () => {
+  const m = modele()
+  const id = edgeId('0,0', '0,1')
+  const trace = (svg) => svg.match(/<path class="edge deriv[^"]*" data-edge[^>]*?\sd="([^"]+)"/)[1]
+  const depart = (d) => d.match(/^M([\d.-]+),([\d.-]+)/).slice(1).map(Number)
+  const arrivee = (d) => d.match(/([\d.-]+),([\d.-]+)$/).slice(1).map(Number)
+
+  const ref = trace(diagramSvg(m))
+  const bouge = trace(diagramSvg({ ...m, anchors: { [id]: { from: 0.1 } } }))
+  assert.notEqual(depart(bouge)[0], depart(ref)[0], 'le depart glisse')
+  assert.equal(depart(bouge)[1], depart(ref)[1], 'mais reste sur le bord')
+  assert.deepEqual(arrivee(bouge), arrivee(ref), 'et l’arrivee ne bouge pas')
+})
+
 check('pli -- la courbe passe par la poignee, extremites inchangees', () => {
   const m = modele()
   const id = edgeId('0,0', '0,1')
@@ -570,7 +597,7 @@ check('pli -- il prime sur le contournement automatique', () => {
 })
 
 check('pli -- les poignees restent hors du contenu mesure', () => {
-  const svg = diagramSvg(modele())
+  const svg = diagramSvg({ ...modele(), selection: { kind: 'edge', id: edgeId('0,0', '0,1') } })
   const contenu = svg.slice(svg.indexOf('data-export="content"'), svg.indexOf('data-export="chrome"'))
   assert.ok(!contenu.includes('poignee'), 'sinon elles gonfleraient le recadrage de l’export')
   assert.match(svg.slice(svg.indexOf('data-export="chrome"')), /class="poignee/)
@@ -619,7 +646,7 @@ check('ancre -- deplacer l’arrivee ne bouge ni le depart ni le bord', () => {
     arrivee: d.match(/([\d.-]+),([\d.-]+)$/).slice(1).map(Number),
   })
   const a = bouts(trace(diagramSvg(m)))
-  const b = bouts(trace(diagramSvg({ ...m, anchors: { [id]: 0.1 } })))
+  const b = bouts(trace(diagramSvg({ ...m, anchors: { [id]: { to: 0.1 } } })))
 
   assert.deepEqual(b.depart, a.depart, 'le lien reste accroche a sa source')
   assert.notEqual(b.arrivee[0], a.arrivee[0], 'l’arrivee glisse le long du bord')
@@ -627,7 +654,7 @@ check('ancre -- deplacer l’arrivee ne bouge ni le depart ni le bord', () => {
 })
 
 check('ancre -- sa poignee reste hors du contenu mesure', () => {
-  const svg = diagramSvg(modele())
+  const svg = diagramSvg({ ...modele(), selection: { kind: 'edge', id: edgeId('0,0', '0,1') } })
   const contenu = svg.slice(svg.indexOf('data-export="content"'), svg.indexOf('data-export="chrome"'))
   assert.ok(!contenu.includes('class="ancre'), 'sinon elle gonflerait le recadrage')
   assert.match(svg.slice(svg.indexOf('data-export="chrome"')), /class="ancre/)
@@ -639,11 +666,11 @@ check('ancre -- elle survit au JSON et disparait avec son lien', () => {
     factName: 'VENTES', measures: mesures,
     dimensions: p35.map((d) => ({ ...d, hierarchies: [] })),
     materialized: [AGG1], sources: {}, analyses: [], freeArrows: [], edgeBends: {},
-    edgeAnchors: { [id]: 0.2, [edgeId(BASE, AGG2)]: 0.8 },
+    edgeAnchors: { [id]: { to: 0.2 }, [edgeId(BASE, AGG2)]: { from: 0.8 } },
     mode: 'partial',
   }
   const relu = fromOwnFormat(JSON.parse(JSON.stringify(toOwnFormat(avec))))
-  assert.equal(relu.edgeAnchors[id], 0.2)
+  assert.deepEqual(relu.edgeAnchors[id], { to: 0.2 })
 
   // Agg2 n'est pas materialise : son lien n'existe pas, son ancre non plus
   const elague = pruneSelection(avec, p35)

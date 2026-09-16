@@ -47,9 +47,12 @@ la remplir, qui modifient la même chose :
    à l'œil, et elle marche dans les deux modes.
 2. **Clic sur un nœud du canvas**, en mode *Treillis complet* : il passe en
    bleu. Pratique sur un petit treillis, vite pénible au-delà de quelques
-   dizaines de nœuds. Les nœuds décochables sont atteignables au **clavier**
-   (Tab pour circuler, Entrée ou Espace pour basculer) ; les données
-   détaillées, qui ne se décochent pas, ne prennent pas le focus.
+   dizaines de nœuds. Les nœuds sont atteignables au **clavier** (Tab pour
+   circuler, Entrée ou Espace).
+
+Un clic **n'enlève jamais rien** : sur un nœud pas encore retenu il l'ajoute,
+sur un nœud déjà retenu il se contente de le désigner. On retire un agrégat
+par la croix du panneau — jamais par mégarde.
 
 Exemple, pour obtenir `codeP, num_mois, codeC` : *+ agrégat*, puis PRODUITS →
 `codeP`, TEMPS → `num_mois`, CLIENTS → `codeC`.
@@ -83,12 +86,16 @@ c'est une colonne de plus, pas un axe : il ne change pas quel agrégat répond.
 Il ne vaut qu'**au niveau dont il dépend** : remonter CLIENTS de `codeC` à
 `ville` retire `nom` des analyses concernées, puisqu'il n'a plus de sens.
 
-### Déplacer l'arrivée d'une flèche
+### Régler une flèche
 
-Chaque flèche porte un petit **carré** posé sur le bord de sa boîte d'arrivée.
-Le glisser fait coulisser le point d'atterrissage **le long de ce bord** : la
-flèche reste accrochée, seul l'endroit où elle se pose change. **Double-clic**
-pour la recentrer.
+**Cliquer une flèche** fait apparaître ses réglages : un **carré à chaque
+bout** et une **poignée ronde** au milieu. Hors sélection, rien n'est affiché —
+ces réglages ne se font qu'occasionnellement, les montrer en permanence
+encombrerait le schéma. Cliquer dans le vide désélectionne.
+
+Glisser un carré fait coulisser le point de départ ou d'arrivée **le long du
+bord de sa boîte** : la flèche reste accrochée, seul l'endroit où elle se pose
+change. **Double-clic** pour recentrer ce bout.
 
 C'est le remède aux arrivées superposées : quand plusieurs flèches se posent au
 même point d'une boîte, on les étale sur sa largeur. Le déplacement est
@@ -98,11 +105,8 @@ ne puisse pas se retrouver au milieu d'une boîte.
 L'ancre est mémorisée en **fraction de la largeur** de la boîte, donc elle
 tient quand un libellé rallonge la boîte.
 
-### Infléchir un lien
-
-Chaque lien porte aussi une petite **poignée ronde** en son milieu. La glisser
-infléchit le tracé ; ses deux extrémités restent accrochées. **Double-clic**
-pour rétablir le tracé automatique.
+Glisser la poignée ronde infléchit le tracé, les deux extrémités restant
+accrochées. **Double-clic** pour rétablir le tracé automatique.
 
 C'est fait pour les croisements gênants : sur un treillis un peu fourni, deux
 flèches peuvent se superposer ou passer derrière une boîte, et rien dans le
@@ -211,6 +215,20 @@ Les identifiants ne sont mis entre guillemets que lorsqu'ils l'exigent : un
 niveau nommé `mon niveau` donne `GROUP BY "mon niveau"`, tandis que `codeP`
 reste nu — sous Oracle, `"codeP"` entre guillemets devient sensible à la casse
 et ne désignerait plus la même colonne.
+
+### Raccourcis clavier
+
+| Raccourci | Action |
+|---|---|
+| `Ctrl+Z` | Annuler (60 pas ; une session de frappe compte pour un) |
+| `Ctrl+C` | Copier l'élément désigné — analyse ou flèche libre |
+| `Ctrl+V` | Coller la copie, sous un nom libre (`A1` → `A3`) |
+| `Tab`, `Entrée`, `Espace` | Circuler entre les nœuds et les retenir |
+
+Seules une analyse et une flèche libre se dupliquent utilement : un agrégat
+**est** son tuple de niveaux, deux exemplaires seraient le même nœud. Les
+raccourcis laissent le copier-coller de texte tranquille dans les champs de
+saisie.
 
 ## Exemple : reproduire la planche p.35
 
@@ -371,7 +389,7 @@ Le contrôle du cœur logique rejoue les planches du cours en assertions :
 node verify.mjs
 ```
 
-70 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
+72 contrôles : les 16 nœuds et les 24 arêtes de la p.34, la chaîne de
 dérivation de la p.35, les sources forcées, le rattachement des analyses, le
 SQL de la p.62, la décomposition des moyennes, l'échappement des identifiants,
 les attributs faibles, l'élagage de la sélection, le tracé des liens qui
