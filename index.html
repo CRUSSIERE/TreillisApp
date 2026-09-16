@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Treillis d'agrégats OLAP</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --line: #d8dce3;
+    --ink: #1c2430;
+    --muted: #6b7684;
+    --accent: #2f6fd0;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column;
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink); background: var(--bg);
+  }
+
+  header {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+
+  button, select, input { font: inherit; color: inherit; }
+  button {
+    padding: 6px 11px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel); cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #eef1f5; }
+  button:disabled { opacity: .35; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { filter: brightness(1.08); }
+  .modes { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .modes button { border: 0; border-radius: 0; }
+  .modes button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+
+  #panel {
+    width: 320px; flex: none; overflow-y: auto; padding: 14px;
+    background: var(--panel); border-right: 1px solid var(--line);
+  }
+  #panel h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 18px 0 8px;
+  }
+  #panel h2:first-child { margin-top: 0; }
+  .row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .row input[type=text] {
+    flex: 1; min-width: 0; padding: 5px 8px;
+    border: 1px solid var(--line); border-radius: 5px;
+  }
+  .row select { padding: 5px 6px; border: 1px solid var(--line); border-radius: 5px; }
+  .icon {
+    flex: none; width: 26px; padding: 5px 0; text-align: center;
+    color: var(--muted); line-height: 1;
+  }
+  .dim { border: 1px solid var(--line); border-radius: 7px; padding: 10px; margin-bottom: 10px; }
+  .dim .levels { margin: 6px 0 0 10px; padding-left: 10px; border-left: 2px solid var(--line); }
+  .dim .all { color: var(--muted); font-style: italic; padding: 5px 0 0 8px; font-size: 13px; }
+  .add { width: 100%; margin-top: 4px; }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+
+  #view { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #canvas { flex: 1; overflow: auto; padding: 20px; }
+  #canvas .hint { margin: 0; }
+  .error {
+    padding: 10px 12px; border-radius: 6px;
+    background: #fdecec; border: 1px solid #f0b4b4; color: #8d2020;
+  }
+  #sql { border-top: 1px solid var(--line); background: var(--panel); }
+  #sql summary { padding: 8px 16px; cursor: pointer; font-weight: 600; }
+  #sql pre {
+    margin: 0; padding: 0 16px 14px; max-height: 260px; overflow: auto;
+    font: 12.5px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Treillis d'agrégats OLAP</h1>
+  <div class="modes">
+    <button id="mode-complete" aria-pressed="true">Treillis complet</button>
+    <button id="mode-partial" aria-pressed="false">Treillis partiel</button>
+  </div>
+  <span id="count" class="hint"></span>
+  <span class="spacer"></span>
+  <button id="btn-import">Importer JSON</button>
+  <button id="btn-export">Exporter JSON</button>
+  <select id="fmt" title="Format d'image">
+    <option value="png">PNG</option>
+    <option value="jpeg">JPG</option>
+    <option value="svg">SVG</option>
+  </select>
+  <button id="btn-image" class="primary">Exporter l'image</button>
+  <input id="file" type="file" accept="application/json,.json" hidden>
+</header>
+
+<main>
+  <div id="panel"></div>
+  <div id="view">
+    <div id="canvas"></div>
+    <details id="sql" hidden>
+      <summary>SQL des vues matérialisées</summary>
+      <pre id="sql-text"></pre>
+    </details>
+  </div>
+</main>
+
+<script type="module">
+import {
+  AGGREGATIONS, ALL, MAX_NODES, aggregateNames, baseKey, buildLattice,
+  derivations, fromOlapSchema, fromOwnFormat, isOlapSchema, latticeSize,
+  parseKey, toOwnFormat, toSql,
+} from './lattice.js'
+
+/* ------------------------------------------------------------------ */
+/* Etat                                                                */
+/* ------------------------------------------------------------------ */
+
+/** Exemple de depart : la planche p.34 du cours, 4 x 4 = 16 noeuds. */
+const EXEMPLE_COURS = () => ({
+  factName: 'VENTES',
+  measures: [
+    { name: 'quantite', agg: 'SUM' },
+    { name: 'montant', agg: 'SUM' },
+  ],
+  dimensions: [
+    { name: 'PRODUITS', levels: ['codeP', 'sous_categ', 'categorie'], hierarchies: [] },
+    { name: 'TEMPS', levels: ['codeT', 'num_mois', 'annee'], hierarchies: [] },
+  ],
+  materialized: [],
+  mode: 'complete',
+})
+
+let state = EXEMPLE_COURS()
+
+const $ = (sel) => document.querySelector(sel)
+const esc = (s) =>
+  String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+
+/** dimensions retenues pour le treillis : une dimension sans niveau n'est pas
+ *  un axe. Toute la vue passe par ce filtre, y compris le calcul de la cle de
+ *  base -- sinon un clic et un dessin porteraient sur des tuples d'arites
+ *  differentes. */
+const axes = () => state.dimensions.filter((d) => d.levels.length > 0)
+
+/** Les cles de noeuds encodent des indices de niveau : une dimension retiree
+ *  ou raccourcie les rend caduques. On elague plutot que de tout effacer --
+ *  ajouter un niveau en fin de hierarchie ne perd aucune selection. */
+function pruneMaterialized() {
+  const sizes = axes().map((d) => d.levels.length + 1)
+  state.materialized = state.materialized.filter((key) => {
+    const node = parseKey(key)
+    return (
+      node.length === sizes.length &&
+      node.every((v, i) => Number.isInteger(v) && v >= 0 && v < sizes[i])
+    )
+  })
+}
+
+/* ------------------------------------------------------------------ */
+/* Panneau de saisie                                                   */
+/* ------------------------------------------------------------------ */
+
+function renderPanel() {
+  const dims = state.dimensions
+    .map((d, i) => {
+      const alt =
+        d.hierarchies && d.hierarchies.length > 1
+          ? `<div class="row">
+               <select data-field="hier" data-d="${i}" title="Hiérarchie servant d'axe">
+                 ${d.hierarchies
+                   .map(
+                     (h) =>
+                       `<option${h.levels.join() === d.levels.join() ? ' selected' : ''}>${esc(h.name)}</option>`,
+                   )
+                   .join('')}
+               </select>
+             </div>`
+          : ''
+
+      const levels = d.levels
+        .map(
+          (lv, j) => `<div class="row">
+            <input type="text" data-field="level" data-d="${i}" data-l="${j}" value="${esc(lv)}">
+            <button class="icon" data-act="move-level" data-d="${i}" data-l="${j}" data-dir="-1"
+              title="Vers le plus fin"${j === 0 ? ' disabled' : ''}>&#9650;</button>
+            <button class="icon" data-act="move-level" data-d="${i}" data-l="${j}" data-dir="1"
+              title="Vers le plus général"${j === d.levels.length - 1 ? ' disabled' : ''}>&#9660;</button>
+            <button class="icon" data-act="del-level" data-d="${i}" data-l="${j}"
+              title="Supprimer ce niveau">&times;</button>
+          </div>`,
+        )
+        .join('')
+
+      return `<div class="dim">
+        <div class="row">
+          <input type="text" data-field="dim-name" data-d="${i}" value="${esc(d.name)}">
+          <button class="icon" data-act="del-dim" data-d="${i}" title="Supprimer la dimension">&times;</button>
+        </div>
+        ${alt}
+        <div class="levels">
+          ${levels}
+          <div class="all">${ALL} &mdash; ajouté automatiquement</div>
+        </div>
+        <button class="add" data-act="add-level" data-d="${i}">+ niveau</button>
+      </div>`
+    })
+    .join('')
+
+  const measures = state.measures
+    .map(
+      (m, i) => `<div class="row">
+        <input type="text" data-field="measure-name" data-m="${i}" value="${esc(m.name)}">
+        <select data-field="measure-agg" data-m="${i}">
+          ${AGGREGATIONS.map((a) => `<option${a === m.agg ? ' selected' : ''}>${a}</option>`).join('')}
+        </select>
+        <button class="icon" data-act="del-measure" data-m="${i}" title="Supprimer la mesure">&times;</button>
+      </div>`,
+    )
+    .join('')
+
+  $('#panel').innerHTML = `
+    <h2>Fait</h2>
+    <div class="row"><input type="text" data-field="factName" value="${esc(state.factName)}"></div>
+
+    <h2>Mesures</h2>
+    ${measures}
+    <button class="add" data-act="add-measure">+ mesure</button>
+
+    <h2>Dimensions</h2>
+    <p class="hint">Niveaux ordonnés du plus fin (la clé) au plus général.</p>
+    ${dims}
+    <button class="add" data-act="add-dim">+ dimension</button>
+  `
+}
+
+/* ------------------------------------------------------------------ */
+/* Dessin du treillis                                                  */
+/* ------------------------------------------------------------------ */
+
+const NODE_H = 30
+const GAP_X = 18
+const GAP_Y = 62
+const MARGIN = 26
+
+/** Le SVG porte ses propres styles : le fichier exporte doit s'afficher seul,
+ *  hors de cette page. Polices systeme uniquement -- une webfont disparait
+ *  a la rasterisation en PNG. */
+const SVG_STYLE = `
+  .edge { stroke: #b6bdc8; stroke-width: 1.2; fill: none; }
+  .edge.deriv { stroke: #2f6fd0; stroke-width: 1.8; }
+  .node rect { fill: #fff; stroke: #c3cad4; stroke-width: 1.2; rx: 6; }
+  .node text {
+    font: 12.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    fill: #1c2430; dominant-baseline: middle; text-anchor: middle;
+  }
+  .node.mat rect { fill: #e8f0fc; stroke: #2f6fd0; stroke-width: 1.8; }
+  .node.base rect { fill: #fdf1e2; stroke: #b45309; stroke-width: 1.8; }
+  /* a cote de la boite, pas au-dessus : la pointe de fleche y arrive.
+     Selecteur plus specifique que "node text", sinon l'etiquette reste
+     centree sur son ancre et la boite en recouvre la moitie gauche. */
+  .node text.tag {
+    font: 10.5px system-ui, sans-serif; fill: #6b7684;
+    text-anchor: start; dominant-baseline: middle;
+  }
+`
+
+const nodeWidth = (label) => Math.max(92, label.length * 7 + 26)
+
+/**
+ * Disposition en couches par rang : rang 0 (donnees detaillees) en haut,
+ * l'agregation descend -- l'orientation des planches p.34 et p.35.
+ * ponytail: ordre lexicographique dans chaque couche, sans reduction de
+ * croisements ; passer a un tri barycentrique si les aretes deviennent
+ * illisibles au-dela de 3 dimensions.
+ */
+function layout(nodes, gutter = 0) {
+  const ranks = [...new Set(nodes.map((n) => n.rank))].sort((a, b) => a - b)
+  const rows = ranks.map((r) => nodes.filter((n) => n.rank === r))
+  const widths = rows.map((row) => row.reduce((w, n) => w + nodeWidth(n.label) + GAP_X, -GAP_X))
+  // gouttiere symetrique : les rangees restent centrees, et l'etiquette posee
+  // a droite d'une boite du bord a la place de s'afficher
+  const width = Math.max(...widths, 200) + MARGIN * 2 + gutter * 2
+
+  const placed = new Map()
+  rows.forEach((row, r) => {
+    let x = (width - widths[r]) / 2
+    const y = MARGIN + r * (NODE_H + GAP_Y)
+    for (const n of row) {
+      const w = nodeWidth(n.label)
+      placed.set(n.key, { ...n, x, y, w, h: NODE_H })
+      x += w + GAP_X
+    }
+  })
+
+  return { placed, width, height: MARGIN * 2 + rows.length * (NODE_H + GAP_Y) - GAP_Y }
+}
+
+function renderCanvas() {
+  const host = $('#canvas')
+  const dims = axes()
+
+  const bail = (html, count = '') => {
+    host.innerHTML = html
+    $('#count').textContent = count
+    $('#sql').hidden = true
+  }
+
+  if (dims.length === 0) {
+    return bail('<p class="hint">Ajoute au moins une dimension avec un niveau.</p>')
+  }
+
+  let lattice
+  try {
+    lattice = buildLattice(dims)
+  } catch (err) {
+    return bail(`<div class="error">${esc(err.message)}</div>`, `${latticeSize(dims)} nœuds (max ${MAX_NODES})`)
+  }
+
+  const base = baseKey(dims)
+  const mats = new Set([...state.materialized, base])
+  const partial = state.mode === 'partial'
+
+  const nodes = partial ? lattice.nodes.filter((n) => mats.has(n.key)) : lattice.nodes
+  const names = partial ? aggregateNames([...mats], dims, state.factName) : null
+
+  // etiquette posee a droite de chaque boite (VENTES, Agg1...) : la plus
+  // longue fixe la gouttiere, sinon elle deborde du canvas
+  const tagOf = (key) => (partial ? names.get(key) ?? '' : key === base ? state.factName : '')
+  const tagRoom = Math.max(0, ...nodes.map((n) => tagOf(n.key).length)) * 6.2
+  const { placed, width, height } = layout(nodes, tagRoom ? tagRoom + 16 : 0)
+
+  const edges = partial
+    ? derivations([...mats], dims).map((e) => ({ ...e, deriv: true }))
+    : lattice.edges
+
+  const edgeSvg = edges
+    .map(({ from, to, deriv }) => {
+      const a = placed.get(from)
+      const b = placed.get(to)
+      if (!a || !b) return ''
+      const marker = deriv ? ' marker-end="url(#arrow)"' : ''
+      return `<line class="edge${deriv ? ' deriv' : ''}" x1="${a.x + a.w / 2}" y1="${a.y + a.h}" ` +
+        `x2="${b.x + b.w / 2}" y2="${b.y - (deriv ? 7 : 0)}"${marker}/>`
+    })
+    .join('')
+
+  const nodeSvg = [...placed.values()]
+    .map((n) => {
+      const isBase = n.key === base
+      const cls = ['node', isBase ? 'base' : '', mats.has(n.key) ? 'mat' : ''].join(' ').trim()
+      const tag = tagOf(n.key)
+      const tagSvg = tag
+        ? `<text class="tag" x="${n.x + n.w + 8}" y="${n.y + n.h / 2 + 1}">${esc(tag)}</text>`
+        : ''
+      const title = isBase
+        ? 'Données détaillées : toujours matérialisé'
+        : mats.has(n.key)
+          ? 'Cliquer pour retirer du treillis partiel'
+          : 'Cliquer pour matérialiser'
+      return `<g class="${cls}" data-key="${esc(n.key)}"${isBase ? '' : ' cursor="pointer"'}>
+        <title>${esc(title)}</title>
+        ${tagSvg}
+        <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/>
+        <text x="${n.x + n.w / 2}" y="${n.y + n.h / 2 + 1}">${esc(n.label)}</text>
+      </g>`
+    })
+    .join('')
+
+  host.innerHTML = `<svg id="svg" xmlns="http://www.w3.org/2000/svg"
+      width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <style>${SVG_STYLE}</style>
+    <defs>
+      <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4"
+        markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" fill="#2f6fd0"/>
+      </marker>
+    </defs>
+    <rect data-export="background" x="0" y="0" width="${width}" height="${height}" fill="#ffffff"/>
+    <g data-export="content">${edgeSvg}${nodeSvg}</g>
+  </svg>`
+
+  const total = lattice.nodes.length
+  $('#count').textContent = partial
+    ? `${mats.size} nœud${mats.size > 1 ? 's' : ''} matérialisé${mats.size > 1 ? 's' : ''} sur ${total}`
+    : `${total} nœuds — clique pour matérialiser`
+
+  $('#sql').hidden = !partial
+  if (partial) $('#sql-text').textContent = toSql(dims, state.measures, [...mats], state.factName)
+}
+
+function render() {
+  pruneMaterialized()
+  renderPanel()
+  renderCanvas()
+}
+
+/* ------------------------------------------------------------------ */
+/* Interactions du panneau                                             */
+/* ------------------------------------------------------------------ */
+
+$('#panel').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-act]')
+  if (!btn) return
+  const d = Number(btn.dataset.d)
+  const l = Number(btn.dataset.l)
+  const m = Number(btn.dataset.m)
+
+  switch (btn.dataset.act) {
+    case 'add-dim':
+      state.dimensions.push({
+        name: `DIMENSION${state.dimensions.length + 1}`,
+        levels: ['cle'],
+        hierarchies: [],
+      })
+      break
+    case 'del-dim':
+      state.dimensions.splice(d, 1)
+      break
+    case 'add-level':
+      state.dimensions[d].levels.push(`niveau${state.dimensions[d].levels.length + 1}`)
+      break
+    case 'del-level':
+      state.dimensions[d].levels.splice(l, 1)
+      break
+    case 'move-level': {
+      const levels = state.dimensions[d].levels
+      const to = l + Number(btn.dataset.dir)
+      if (to < 0 || to >= levels.length) return
+      ;[levels[l], levels[to]] = [levels[to], levels[l]]
+      break
+    }
+    case 'add-measure':
+      state.measures.push({ name: `mesure${state.measures.length + 1}`, agg: 'SUM' })
+      break
+    case 'del-measure':
+      state.measures.splice(m, 1)
+      break
+    default:
+      return
+  }
+  render()
+})
+
+// Frappe au clavier : seul le dessin est refait. Redessiner le panneau
+// arracherait le focus du champ en cours de saisie a chaque caractere.
+$('#panel').addEventListener('input', (e) => {
+  const el = e.target
+  const d = Number(el.dataset.d)
+  switch (el.dataset.field) {
+    case 'factName': state.factName = el.value; break
+    case 'dim-name': state.dimensions[d].name = el.value; break
+    case 'level': state.dimensions[d].levels[Number(el.dataset.l)] = el.value; break
+    case 'measure-name': state.measures[Number(el.dataset.m)].name = el.value; break
+    default: return
+  }
+  renderCanvas()
+})
+
+$('#panel').addEventListener('change', (e) => {
+  const el = e.target
+  if (el.dataset.field === 'measure-agg') {
+    state.measures[Number(el.dataset.m)].agg = el.value
+    renderCanvas()
+  } else if (el.dataset.field === 'hier') {
+    const dim = state.dimensions[Number(el.dataset.d)]
+    const chosen = dim.hierarchies.find((h) => h.name === el.value)
+    if (chosen) {
+      dim.levels = [...chosen.levels]
+      render()
+    }
+  }
+})
+
+/* Selection des noeuds a materialiser */
+$('#canvas').addEventListener('click', (e) => {
+  const g = e.target.closest('[data-key]')
+  if (!g) return
+  const key = g.dataset.key
+  if (key === baseKey(axes())) return // la table de faits n'est pas optionnelle
+
+  const i = state.materialized.indexOf(key)
+  if (i >= 0) state.materialized.splice(i, 1)
+  else state.materialized.push(key)
+  renderCanvas()
+})
+
+/* ------------------------------------------------------------------ */
+/* Modes                                                               */
+/* ------------------------------------------------------------------ */
+
+function setMode(mode) {
+  state.mode = mode
+  $('#mode-complete').setAttribute('aria-pressed', String(mode === 'complete'))
+  $('#mode-partial').setAttribute('aria-pressed', String(mode === 'partial'))
+  renderCanvas()
+}
+$('#mode-complete').onclick = () => setMode('complete')
+$('#mode-partial').onclick = () => setMode('partial')
+
+/* ------------------------------------------------------------------ */
+/* Import / export JSON                                                */
+/* ------------------------------------------------------------------ */
+
+function download(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const slug = () => (state.factName || 'treillis').replace(/[^\w.-]+/g, '_') || 'treillis'
+
+$('#btn-export').onclick = () => {
+  download(
+    new Blob([JSON.stringify(toOwnFormat(state), null, 2)], { type: 'application/json' }),
+    `${slug()}-treillis.json`,
+  )
+}
+
+$('#btn-import').onclick = () => $('#file').click()
+
+$('#file').addEventListener('change', async (e) => {
+  const file = e.target.files[0]
+  if (!file) return
+  e.target.value = '' // reimporter le meme fichier doit redeclencher l'evenement
+  try {
+    const json = JSON.parse(await file.text())
+    state = isOlapSchema(json)
+      ? { ...fromOlapSchema(json), materialized: [], mode: state.mode }
+      : fromOwnFormat(json)
+    setMode(state.mode)
+    render()
+  } catch (err) {
+    alert(`Import impossible : ${err.message}`)
+  }
+})
+
+/* ------------------------------------------------------------------ */
+/* Export image                                                        */
+/* ------------------------------------------------------------------ */
+
+/** Copie du diagramme dimensionnee en px, recadree sur son contenu reel.
+ *  Un seul getBBox sur le groupe sans transform suffit : il unit deja ses
+ *  enfants dans l'espace de la racine. Le fond reste hors du groupe pour ne
+ *  pas gonfler la boite. */
+function exportClone(svg, border = 16) {
+  const box = svg.querySelector('[data-export="content"]').getBBox()
+  const x = box.x - border
+  const y = box.y - border
+  const width = box.width + border * 2
+  const height = box.height + border * 2
+
+  const clone = svg.cloneNode(true)
+  clone.removeAttribute('id')
+  clone.setAttribute('viewBox', `${x} ${y} ${width} ${height}`)
+  clone.setAttribute('width', String(width))
+  clone.setAttribute('height', String(height))
+  const bg = clone.querySelector('[data-export="background"]')
+  bg.setAttribute('x', String(x))
+  bg.setAttribute('y', String(y))
+  bg.setAttribute('width', String(width))
+  bg.setAttribute('height', String(height))
+  return { clone, width, height }
+}
+
+async function exportImage(format) {
+  const svg = $('#svg')
+  if (!svg) {
+    alert('Rien à exporter : le treillis n’est pas affiché.')
+    return
+  }
+
+  const { clone, width, height } = exportClone(svg)
+  const text = new XMLSerializer().serializeToString(clone)
+
+  if (format === 'svg') {
+    download(new Blob([text], { type: 'image/svg+xml;charset=utf-8' }), `${slug()}-treillis.svg`)
+    return
+  }
+
+  const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml;charset=utf-8' }))
+  const canvas = document.createElement('canvas')
+  const scale = 2 // raster x2 : le texte reste net a l'impression
+  try {
+    const img = new Image()
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = () => reject(new Error('échec du rendu SVG'))
+      img.src = url
+    })
+    canvas.width = width * scale
+    canvas.height = height * scale
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('canvas 2D indisponible')
+    ctx.scale(scale, scale)
+    // le JPEG n'a pas de canal alpha : on peint le fond sur le canvas plutot
+    // que de compter sur la transparence
+    if (format === 'jpeg') {
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, width, height)
+    }
+    ctx.drawImage(img, 0, 0, width, height)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+
+  const blob = await new Promise((res) =>
+    canvas.toBlob(res, format === 'png' ? 'image/png' : 'image/jpeg', 0.95),
+  )
+  if (!blob) throw new Error('échec de génération de l’image')
+  download(blob, `${slug()}-treillis.${format === 'jpeg' ? 'jpg' : 'png'}`)
+}
+
+$('#btn-image').onclick = () => exportImage($('#fmt').value).catch((err) => alert(err.message))
+
+render()
+</script>
+</body>
+</html>
