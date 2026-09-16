@@ -54,6 +54,31 @@ se recalcule pas toujours avec la même fonction :
 | `COUNT` | `COUNT` | `SUM` — on cumule des comptes |
 | `AVG` | `AVG` | **non additive** : un commentaire signale qu'il faut repartir du détail |
 
+## Exemple : reproduire la planche p.35
+
+[`exemple-p35.json`](exemple-p35.json) contient le treillis partiel de la
+planche « Détermination de certains nœuds du treillis des vues ».
+**Importer JSON** → basculer sur **Treillis partiel** :
+
+```
+VENTES  = codeP, codeT, codeC      (table de faits, données détaillées)
+  |
+Agg1    = codeP, num_mois, codeC   analyse A1 : Sum(Qte) par Num_Mois, CodeP, CodeC
+  |
+Agg2    = All, annee, codeC        analyse A2 : Sum(Montant) par Annee, Nom
+```
+
+Trois dimensions de trois niveaux, et deux nœuds cochés : `codeP, num_mois,
+codeC` et `annee, codeC`. Deux écarts d'affichage avec la planche, sans
+conséquence sur le treillis lui-même :
+
+- l'app écrit `All, annee, codeC` là où la planche écrit `annee, codeC` — une
+  dimension au niveau `All` reste affichée, comme sur la planche p.34
+  (`All, codeT`, `All, All`) ; elle n'apparaît ni dans le `SELECT` ni dans le
+  `GROUP BY` du SQL généré ;
+- `Nom` est un attribut faible de `codeC`, pas un niveau de hiérarchie : il ne
+  gradue pas l'axe CLIENTS et n'entre donc pas dans le treillis.
+
 ## Passerelle avec l'app de modélisation OLAP
 
 Un schéma en étoile modélisé avec

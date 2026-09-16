@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "factName": "VENTES",
+  "measures": [
+    { "name": "quantite", "agg": "SUM" },
+    { "name": "montant", "agg": "SUM" }
+  ],
+  "dimensions": [
+    { "name": "PRODUITS", "levels": ["codeP", "sous_categ", "categorie"] },
+    { "name": "TEMPS", "levels": ["codeT", "num_mois", "annee"] },
+    { "name": "CLIENTS", "levels": ["codeC", "ville", "pays"] }
+  ],
+  "materialized": ["0,1,0", "3,2,0"],
+  "mode": "partial"
+}
