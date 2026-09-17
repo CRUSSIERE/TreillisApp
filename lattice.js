@@ -211,16 +211,26 @@ export function analysisIssue(levels, targetKey, dimensions) {
 /**
  * Attributs faibles utilisables par une analyse. Un attribut faible depend de
  * SON parametre (p.8 : "dont la valeur depend de la valeur du parametre
- * associe") : `nom` n'a de sens que si CLIENTS est au niveau `codeC`. Il
- * n'ajoute aucune granularite -- c'est une colonne de plus, pas un axe --
- * donc il ne change pas quel agregat repond a l'analyse.
+ * associe"), mais la dependance remonte la hierarchie : si l'analyse groupe
+ * par CodeE, chaque groupe est UN employe, donc UNE societe, donc un seul
+ * NomSOC. L'attribut est donc utilisable des que l'analyse est au niveau de
+ * son parametre ou PLUS FIN -- on peut afficher NomSOC sans CodeSOC, le code
+ * restant dans l'agregat. Au niveau plus grossier (Ville regroupe plusieurs
+ * societes) il redeviendrait indetermine : `i <= k` et pas l'inverse.
+ *
+ * Il n'ajoute aucune granularite -- c'est une colonne de plus, pas un axe --
+ * donc il ne change pas quel agregat repond a l'analyse : l'agregat qui sert
+ * deja le niveau de l'analyse sert forcement ce qu'il determine.
  */
 export function availableWeak(levels, dimensions) {
-  return dimensions.flatMap((d, i) => (d.weak?.[levels[i]] ?? []).map((name) => ({
-    dimension: d.name,
-    level: d.levels[levels[i]],
-    name,
-  })))
+  return dimensions.flatMap((d, i) =>
+    Object.entries(d.weak ?? {}).flatMap(([k, noms]) =>
+      // `All` (indice >= levels.length) ne determine plus rien : exclu de fait
+      levels[i] <= Number(k)
+        ? noms.map((name) => ({ dimension: d.name, level: d.levels[Number(k)], name }))
+        : [],
+    ),
+  )
 }
 
 /** Agg1, Agg2... dans l'ordre topologique ; la base garde le nom du fait. */

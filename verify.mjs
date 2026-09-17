@@ -359,10 +359,18 @@ check('p.35 -- "Nom" est utilisable dans une analyse au niveau codeC', () => {
   assert.deepEqual(dispo, ['nom', 'prenom'])
 })
 
-check('attributs faibles -- ils dependent de LEUR niveau, pas de la dimension', () => {
-  // CLIENTS remonte a `ville` : `nom` n'a plus de sens (p.8)
+check('attributs faibles -- la dependance remonte la hierarchie, jamais l’inverse', () => {
+  // CLIENTS remonte a `ville` : une ville groupe plusieurs clients, donc `nom`
+  // n'a plus de sens (p.8). TEMPS reste a `codeT`, plus fin que `num_mois` :
+  // un jour tombe dans UN mois, donc `lib_mois` est affichable sans num_mois.
   const aVille = availableWeak([0, 0, 1], p35faible).map((w) => w.name)
-  assert.deepEqual(aVille, [], 'nom depend de codeC, pas de ville')
+  assert.deepEqual(aVille, ['lib_mois'], 'nom depend de codeC ; lib_mois est determine par codeT')
+
+  // et au niveau du parametre lui-meme, rien ne change
+  assert.deepEqual(availableWeak([0, 1, 0], p35faible).map((w) => w.name), ['lib_mois', 'nom', 'prenom'])
+
+  // `All` ne determine plus rien
+  assert.deepEqual(availableWeak([0, 3, 3], p35faible).map((w) => w.name), [])
   // TEMPS au mois expose lib_mois
   assert.deepEqual(availableWeak([0, 1, 0], p35faible).map((w) => w.name), ['lib_mois', 'nom', 'prenom'])
 })
