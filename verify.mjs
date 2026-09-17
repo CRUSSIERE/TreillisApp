@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
+  ALL,
   MAX_NODES,
   aggregateNames,
   baseKey,
@@ -310,6 +311,66 @@ check('p.7 -- COUNT se cumule toujours en SUM a la seconde passe', () => {
   const [bloc1, bloc2] = sql.split('\n\n')
   assert.match(bloc1, /COUNT\(nb\) AS nb/)
   assert.match(bloc2, /SUM\(nb\) AS nb/)
+})
+
+/* --- masquer un parametre remplace par son attribut faible -------------- */
+
+// la structure de ACHAT_MD-treillis.json, reduite a ce qui compte ici
+const achat = [
+  { name: 'TEMPS_MD', levels: ['Jour', 'Mois_Annee', 'Annee'], weak: { 1: ['NomMois'] } },
+  { name: 'PRODUIT_MD', levels: ['CodeP', 'CodeG', 'SecteurG'], weak: { 0: ['NomP'], 1: ['NomG'] } },
+  {
+    name: 'EMPLOYE_MD',
+    levels: ['CodeE', 'CodeSE', 'CodeSOC', 'Region', 'Pays'],
+    weak: { 0: ['NomE'], 1: ['NomSE'], 2: ['NomSOC'] },
+  },
+]
+const A1 = [2, 1, 3] // Annee, CodeG, Region -- l'analyse de la capture
+
+const analyseA1 = (extras, hidden) => ({
+  id: 'a1', name: 'A1', levels: [...A1], extras, hidden,
+})
+const elaguer = (a) =>
+  pruneSelection({ materialized: [], sources: {}, freeArrows: [], analyses: [a] }, achat).analyses[0]
+
+check('masquage -- l’attribut faible s’affiche a la place de son parametre', () => {
+  assert.equal(displayLabel(A1, achat), 'Annee, CodeG, Region')
+  // CodeG masque : NomG le remplacera dans l'etiquette assemblee par l'appelant
+  assert.equal(displayLabel(A1, achat, [1]), 'Annee, Region')
+  // masquer une dimension deja a All ne change rien
+  assert.equal(displayLabel([2, 1, 5], achat, [2]), 'Annee, CodeG')
+  // tout masque : rien a imprimer, l'appelant laisse les extras seuls
+  assert.equal(displayLabel(A1, achat, [0, 1, 2]), ALL)
+})
+
+check('masquage -- il ne touche pas a la granularite de l’analyse', () => {
+  // p.8 : un attribut faible n'est pas un axe. Masquer est un choix
+  // d'affichage -- `levels` doit sortir de l'elagage intact, sinon le
+  // rattachement changerait dans le dos de l'utilisateur.
+  const sans = elaguer(analyseA1(['NomG'], []))
+  const avec = elaguer(analyseA1(['NomG'], [1]))
+  assert.deepEqual(avec.levels, sans.levels)
+  assert.deepEqual(avec.levels, A1)
+
+  const mats = ['1,1,2', '2,1,3']
+  assert.equal(analysisSource(avec.levels, mats, achat), analysisSource(sans.levels, mats, achat))
+})
+
+check('masquage -- sans attribut faible pour le remplacer, le niveau revient', () => {
+  // NomG affiche : masquer CodeG a un sens
+  assert.deepEqual(elaguer(analyseA1(['NomG'], [1])).hidden, [1])
+  // NomG retire : masquer CodeG effacerait la colonne sans remplacante
+  assert.deepEqual(elaguer(analyseA1([], [1])).hidden, [])
+  // masquage vise sur une dimension dont aucun attribut faible n'est coche
+  assert.deepEqual(elaguer(analyseA1(['NomG'], [0, 2])).hidden, [])
+})
+
+check('masquage -- il traverse l’aller-retour JSON', () => {
+  const lire = (a) => fromOwnFormat({ dimensions: [], analyses: [{ name: 'A', levels: [], ...a }] }).analyses[0]
+  assert.deepEqual(lire({ hidden: [1, 2] }).hidden, [1, 2])
+  // absent ou mal forme : liste vide, jamais undefined -- le rendu itere dessus
+  assert.deepEqual(lire({}).hidden, [])
+  assert.deepEqual(lire({ hidden: ['x', 1.5, 2] }).hidden, [2])
 })
 
 /* --- elagage de la selection -------------------------------------------- */

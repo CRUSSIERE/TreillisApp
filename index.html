@@ -66,6 +66,10 @@
   .dim .levels { margin: 6px 0 0 10px; padding-left: 10px; border-left: 2px solid var(--line); }
   .cases { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; }
   .cases label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+  .masquer {
+    display: inline-flex; align-items: center; gap: 3px;
+    font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap;
+  }
   .row.faibles { margin: -2px 0 8px 0; }
   .row.faibles input { font-size: 12px; color: var(--muted); }
   .dim .all { color: var(--muted); font-style: italic; padding: 5px 0 0 8px; font-size: 13px; }
@@ -163,7 +167,7 @@
  *
  *   >>> INCREMENTER A CHAQUE MODIFICATION D'UN MODULE <<<
  */
-const V = '19'
+const V = '20'
 
 const [modLattice, modRender, modFiles] = await Promise.all([
   import(`./lattice.js?v=${V}`),
@@ -404,6 +408,12 @@ function renderAnalyses() {
 
   const rows = state.analyses
     .map((a, i) => {
+      const faibles = availableWeak(a.levels, dims)
+      // on ne propose de masquer un niveau que si un attribut faible coche
+      // prend sa place : sinon la colonne disparaitrait sans remplacante
+      const remplacees = new Set(
+        faibles.filter((w) => a.extras?.includes(w.name)).map((w) => w.dim),
+      )
       const selects = dims
         .map(
           (d, di) => `<div class="row">
@@ -416,6 +426,16 @@ function renderAnalyses() {
                 )
                 .join('')}
             </select>
+            ${
+              remplacees.has(di)
+                ? `<label class="masquer" title="${esc(
+                    `N’affiche pas ${d.levels[a.levels[di]]} : son attribut faible le remplace. Le regroupement ne change pas.`,
+                  )}">
+                     <input type="checkbox" data-field="ana-hide" data-i="${i}" data-d="${di}"${
+                       a.hidden?.includes(di) ? ' checked' : ''
+                     }> masquer</label>`
+                : ''
+            }
           </div>`,
         )
         .join('')
@@ -435,7 +455,6 @@ function renderAnalyses() {
           ${options}
         </select>
       </div>`
-      const faibles = availableWeak(a.levels, dims)
       const casesFaibles = faibles.length
         ? `<div class="row"><span class="dlabel">attributs faibles</span>
              <span class="grow cases">${faibles
@@ -632,8 +651,13 @@ function renderCanvas() {
       label: a.name,
       tag:
         `${mesures.length ? `${mesures.map((m) => `${m.agg}(${m.name})`).join(', ')} · ` : ''}` +
-        displayLabel(a.levels, dims) +
-        (a.extras?.length ? ` + ${a.extras.join(', ')}` : ''),
+        (() => {
+          const niveaux = displayLabel(a.levels, dims, a.hidden)
+          if (!a.extras?.length) return niveaux
+          // tout masque : `All` mentirait, ce sont les attributs faibles qui
+          // portent le detail. On les laisse seuls.
+          return `${niveaux === ALL ? '' : `${niveaux} + `}${a.extras.join(', ')}`
+        })(),
       target,
       issue: analysisIssue(a.levels, target, dims),
     }
@@ -750,6 +774,7 @@ $('#panel').addEventListener('click', (e) => {
         id: `an${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
         name: `A${state.analyses.length + 1}`,
         extras: [],
+        hidden: [],
         levels: axes().map(() => 0),
         measures: [state.measures[0]?.name].filter(Boolean),
       })
@@ -826,6 +851,13 @@ $('#panel').addEventListener('change', (e) => {
     render()
   } else if (el.dataset.field === 'ana-level') {
     state.analyses[Number(el.dataset.i)].levels[Number(el.dataset.d)] = Number(el.value)
+    render()
+  } else if (el.dataset.field === 'ana-hide') {
+    const ana = state.analyses[Number(el.dataset.i)]
+    const d = Number(el.dataset.d)
+    ana.hidden = el.checked
+      ? [...new Set([...(ana.hidden ?? []), d])].sort((x, y) => x - y)
+      : (ana.hidden ?? []).filter((x) => x !== d)
     render()
   } else if (el.dataset.field === 'ana-extra') {
     const ana = state.analyses[Number(el.dataset.i)]

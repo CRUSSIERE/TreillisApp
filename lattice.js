@@ -41,9 +41,13 @@ export function labelOf(node, dimensions) {
  * deux noeuds distincts different sur au moins une dimension, et la taire d'un
  * cote la laisse visible de l'autre.
  */
-export function displayLabel(node, dimensions) {
+/** `tues` : indices de dimensions dont on n'imprime pas le niveau, parce
+ *  qu'un attribut faible l'affiche a sa place (NomG au lieu de CodeG). Le
+ *  groupement ne change pas -- c'est un choix d'affichage, pas de granularite. */
+export function displayLabel(node, dimensions, tues = []) {
+  const caches = new Set(tues)
   const vus = node
-    .map((_, d) => levelName(node, dimensions, d))
+    .map((_, d) => (caches.has(d) ? ALL : levelName(node, dimensions, d)))
     .filter((name) => name !== ALL)
   return vus.length ? vus.join(', ') : ALL
 }
@@ -227,7 +231,7 @@ export function availableWeak(levels, dimensions) {
     Object.entries(d.weak ?? {}).flatMap(([k, noms]) =>
       // `All` (indice >= levels.length) ne determine plus rien : exclu de fait
       levels[i] <= Number(k)
-        ? noms.map((name) => ({ dimension: d.name, level: d.levels[Number(k)], name }))
+        ? noms.map((name) => ({ dim: i, dimension: d.name, level: d.levels[Number(k)], name }))
         : [],
     ),
   )
@@ -366,14 +370,19 @@ export function pruneSelection(selection, dimensions) {
       const v = a.levels?.[j]
       return Number.isInteger(v) && v >= 0 && v <= d.levels.length ? v : 0
     })
-    const dispo = new Set(availableWeak(levels, dimensions).map((w) => w.name))
+    const dispo = availableWeak(levels, dimensions)
+    // un attribut faible ne vaut qu'au niveau dont il depend : changer ce
+    // niveau le retire de l'analyse
+    const extras = (a.extras ?? []).filter((x) => dispo.some((w) => w.name === x))
+    // ... et masquer un niveau n'a de sens que si un attribut faible l'affiche
+    // a sa place : l'extra retire, la colonne reapparait au lieu de disparaitre
+    const remplacees = new Set(dispo.filter((w) => extras.includes(w.name)).map((w) => w.dim))
     return {
       ...reste,
       id: a.id ?? `an${i}`,
       levels,
-      // un attribut faible ne vaut qu'au niveau dont il depend : changer ce
-      // niveau le retire de l'analyse
-      extras: (a.extras ?? []).filter((x) => dispo.has(x)),
+      extras,
+      hidden: (a.hidden ?? []).filter((d) => remplacees.has(d)),
       // un rattachement impose vers un agregat supprime redevient automatique
       ...(target && presents.has(target) ? { target } : {}),
     }
@@ -501,6 +510,8 @@ export function fromOwnFormat(json) {
       // les attributs faibles affiches par l'analyse : des colonnes de plus,
       // sans effet sur la granularite ni sur le rattachement
       extras: Array.isArray(a.extras) ? a.extras.filter((x) => typeof x === 'string') : [],
+      // dimensions dont le niveau cede la place a son attribut faible
+      hidden: Array.isArray(a.hidden) ? a.hidden.filter(Number.isInteger) : [],
       id: typeof a.id === 'string' ? a.id : `an${i}`,
       // rattachement impose ; absent = calcule par analysisSource
       ...(typeof a.target === 'string' ? { target: a.target } : {}),
