@@ -163,7 +163,7 @@
  *
  *   >>> INCREMENTER A CHAQUE MODIFICATION D'UN MODULE <<<
  */
-const V = '16'
+const V = '17'
 
 const [modLattice, modRender, modFiles] = await Promise.all([
   import(`./lattice.js?v=${V}`),
@@ -1144,7 +1144,7 @@ $('#file').addEventListener('change', async (e) => {
   try {
     const json = JSON.parse(await file.text())
     state = isOlapSchema(json)
-      ? { ...fromOlapSchema(json), materialized: [], mode: state.mode }
+      ? { ...fromOlapSchema(json), mode: state.mode }
       : fromOwnFormat(json)
     setMode(state.mode)
     render()

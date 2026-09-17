@@ -832,6 +832,21 @@ check('import OLAP -- les hierarchies alternatives restent proposables', () => {
   assert.deepEqual(produits.hierarchies[1].levels, ['codeP', 'marque'])
 })
 
+check('import OLAP -- l’etat importe est complet, pas seulement le schema', () => {
+  // vecu : fromOlapSchema ne rendait que factName/measures/dimensions, et le
+  // premier state.analyses.map() du rendu levait "Cannot read properties of
+  // undefined". Le rendu itere ces champs sans garde : ils doivent exister.
+  const etat = fromOlapSchema(exportOlap)
+  assert.deepEqual(etat.analyses, [])
+  assert.deepEqual(etat.materialized, [])
+  assert.deepEqual(etat.freeArrows, [])
+  assert.deepEqual(etat.sources, {})
+  assert.deepEqual(etat.edgeBends, {})
+  assert.deepEqual(etat.edgeAnchors, {})
+  // et il doit repasser par notre propre lecteur sans rien perdre
+  assert.deepEqual(fromOwnFormat(JSON.parse(JSON.stringify(etat))), etat)
+})
+
 check('import OLAP -- un fichier etranger est refuse avec un message clair', () => {
   assert.throws(() => fromOlapSchema({ hello: 'world' }), /n’est pas un schema OLAP/)
 })

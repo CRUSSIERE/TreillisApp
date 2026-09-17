@@ -589,5 +589,19 @@ export function fromOlapSchema(json) {
     return { name: d.name, levels, weak, hierarchies }
   })
 
-  return { factName, measures, dimensions: dimensions.filter((d) => d.levels.length > 0) }
+  // l'autre app ne connait que le schema : tout ce qui est propre au treillis
+  // (materialisation, analyses, trace des fleches) demarre vide -- mais DOIT
+  // exister, le rendu itere dessus sans garde.
+  return {
+    factName,
+    measures,
+    dimensions: dimensions.filter((d) => d.levels.length > 0),
+    materialized: [],
+    sources: {},
+    analyses: [],
+    freeArrows: [],
+    edgeBends: {},
+    edgeAnchors: {},
+    mode: 'complete',
+  }
 }
