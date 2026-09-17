@@ -163,7 +163,7 @@
  *
  *   >>> INCREMENTER A CHAQUE MODIFICATION D'UN MODULE <<<
  */
-const V = '17'
+const V = '18'
 
 const [modLattice, modRender, modFiles] = await Promise.all([
   import(`./lattice.js?v=${V}`),
@@ -458,15 +458,15 @@ function renderAnalyses() {
           <button class="icon" data-act="del-ana" data-i="${i}" title="Supprimer l’analyse">&times;</button>
         </div>
         <div class="row">
-          <span class="dlabel">mesure</span>
-          <select data-field="ana-measure" data-i="${i}">
-            ${state.measures
-              .map(
-                (m) =>
-                  `<option${m.name === a.measure ? ' selected' : ''}>${esc(m.name)}</option>`,
-              )
-              .join('')}
-          </select>
+          <span class="dlabel">mesures</span>
+          <span class="grow cases">${state.measures
+            .map(
+              (m) => `<label title="${esc(`${m.agg}(${m.name})`)}">
+                <input type="checkbox" data-field="ana-measure" data-i="${i}"
+                  data-n="${esc(m.name)}"${a.measures?.includes(m.name) ? ' checked' : ''}>
+                ${esc(m.name)}</label>`,
+            )
+            .join('')}</span>
         </div>
         ${selects}
         ${casesFaibles}
@@ -619,7 +619,10 @@ function renderCanvas() {
   // On resout ici le rattachement et sa validite : render.js ne connait pas
   // la semantique OLAP, il ne fait que placer et dessiner.
   const analyses = state.analyses.map((a) => {
-    const measure = state.measures.find((m) => m.name === a.measure)
+    // les mesures inconnues (supprimees depuis) se taisent au lieu de casser
+    const mesures = (a.measures ?? [])
+      .map((n) => state.measures.find((m) => m.name === n))
+      .filter(Boolean)
     const target = a.target && mats.has(a.target)
       ? a.target
       : analysisSource(a.levels, [...mats], dims)
@@ -628,7 +631,7 @@ function renderCanvas() {
       rank: 0,
       label: a.name,
       tag:
-        `${measure ? `${measure.agg}(${measure.name}) · ` : ''}` +
+        `${mesures.length ? `${mesures.map((m) => `${m.agg}(${m.name})`).join(', ')} · ` : ''}` +
         displayLabel(a.levels, dims) +
         (a.extras?.length ? ` + ${a.extras.join(', ')}` : ''),
       target,
@@ -748,7 +751,7 @@ $('#panel').addEventListener('click', (e) => {
         name: `A${state.analyses.length + 1}`,
         extras: [],
         levels: axes().map(() => 0),
-        measure: state.measures[0]?.name ?? '',
+        measures: [state.measures[0]?.name].filter(Boolean),
       })
       break
     case 'del-ana':
@@ -840,7 +843,11 @@ $('#panel').addEventListener('change', (e) => {
     else delete state.analyses[Number(el.dataset.i)].target
     render()
   } else if (el.dataset.field === 'ana-measure') {
-    state.analyses[Number(el.dataset.i)].measure = el.value
+    const ana = state.analyses[Number(el.dataset.i)]
+    const nom = el.dataset.n
+    ana.measures = el.checked
+      ? state.measures.map((m) => m.name).filter((n) => n === nom || ana.measures?.includes(n))
+      : (ana.measures ?? []).filter((x) => x !== nom)
     render()
   } else if (el.dataset.field === 'hier') {
     const dim = state.dimensions[Number(el.dataset.d)]

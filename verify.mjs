@@ -752,6 +752,18 @@ check('JSON -- la selection rechargee redonne le meme treillis partiel', () => {
   )
 })
 
+check('analyses -- plusieurs mesures, et l’ancien `measure` seul est relu', () => {
+  const socle = { dimensions: [], measures: [{ name: 'quantite' }, { name: 'montant' }] }
+  const lire = (a) => fromOwnFormat({ ...socle, analyses: [{ name: 'A', levels: [], ...a }] }).analyses[0]
+
+  assert.deepEqual(lire({ measures: ['quantite', 'montant'] }).measures, ['quantite', 'montant'])
+  // fichiers d'avant (exemple-p35.json en porte) : un seul nom, au singulier
+  assert.deepEqual(lire({ measure: 'montant' }).measures, ['montant'])
+  // rien de precise : la premiere mesure, comme avant
+  assert.deepEqual(lire({}).measures, ['quantite'])
+  assert.deepEqual(lire({ measures: ['montant', 42, null] }).measures, ['montant'])
+})
+
 check('JSON -- un champ mal forme est nomme, pas avale', () => {
   assert.throws(() => fromOwnFormat(null), /n’est pas un objet/)
   assert.throws(() => fromOwnFormat({ dimensions: 'PRODUITS' }), /"dimensions" doit etre/)

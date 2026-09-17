@@ -479,7 +479,15 @@ export function fromOwnFormat(json) {
     return {
       name: a.name,
       levels: [...a.levels],
-      measure: typeof a.measure === 'string' ? a.measure : (measures[0]?.name ?? ''),
+      // une analyse peut porter plusieurs mesures. `measure` au singulier est
+      // l'ancien format : relu tel quel, les fichiers deja exportes s'ouvrent.
+      measures: Array.isArray(a.measures)
+        ? a.measures.filter((m) => typeof m === 'string')
+        : typeof a.measure === 'string'
+          ? [a.measure]
+          : measures[0]
+            ? [measures[0].name]
+            : [],
       // les attributs faibles affiches par l'analyse : des colonnes de plus,
       // sans effet sur la granularite ni sur le rattachement
       extras: Array.isArray(a.extras) ? a.extras.filter((x) => typeof x === 'string') : [],
